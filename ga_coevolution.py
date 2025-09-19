@@ -1,21 +1,27 @@
 import random
 import numpy as np
 import multiprocessing
+from functools import partial
+import traceback
+import sys
 
 from deap import base, creator, tools, algorithms
 from hunted_sim import HuntedSim, example_config
 
 # --- GA parameters ---
 POP_SIZE = 20
-NGEN = 50  # keep small for testing
-CXPB = 1.0
+NGEN = 50
+CXPB = 0.9  # Crossover probability
+# Mutation probabilities
+MUTPB_PRED = 1.0 / sum([p['count'] for p in example_config()['predators']])
+MUTPB_ESC = 1.0 / (len(example_config()['escapers']) * 5)
 
-# --- Predator genome: prox radii for each predator ---
+# --- Predator genome constants ---
 PREDATOR_COUNT = sum([p['count'] for p in example_config()['predators']])
 PREDATOR_MIN = 5.0
 PREDATOR_MAX = 100.0
 
-# --- Escaper genome ---
+# --- Escaper genome constants ---
 ESCAPER_COUNT = len(example_config()['escapers'])
 BORDERS = ['N', 'S', 'E', 'W']
 COORD_MIN, COORD_MAX = 0.0, 400.0
@@ -24,7 +30,16 @@ TIME_MIN, TIME_MAX = 0.0, 600.0
 AVOID_MIN, AVOID_MAX = 0.0, 2.0
 
 # --- Hall of Fame size ---
-HOF_SIZE = 10
+HOF_SIZE = 5
+
+# ------------- Safe creator setup -------------
+# Avoid re-creating creators if this file is executed multiple times in the same interpreter
+if "FitnessMin" not in creator.__dict__:
+    creator.create("FitnessMin", base.Fitness, weights=(-1.0,))
+if "Predator" not in creator.__dict__:
+    creator.create("Predator", list, fitness=creator.FitnessMin)
+if "Escaper" not in creator.__dict__:
+    creator.create("Escaper", list, fitness=creator.FitnessMin)
 
 # --- Predator individual: list of prox radii ---
 def predator_init():
@@ -44,13 +59,21 @@ def escaper_init():
 
 # --- Decode escaper genome into list of dicts for simulator ---
 def decode_escaper(genome):
+    # If None or empty, return default escapers
+    if genome is None or len(genome) == 0:
+        return example_config()['escapers']
     escapers = []
     for i in range(0, len(genome), 5):
-        border = BORDERS[int(genome[i]) % 4]
-        coord = genome[i+1]
-        speed = genome[i+2]
-        time = genome[i+3]
-        avoidance = genome[i+4]
+        try:
+            border_idx = int(round(genome[i])) % len(BORDERS)
+            border = BORDERS[border_idx]
+            coord = float(np.clip(genome[i+1], COORD_MIN, COORD_MAX))
+            speed = float(np.clip(genome[i+2], SPEED_MIN, SPEED_MAX))
+            time = float(np.clip(genome[i+3], TIME_MIN, TIME_MAX))
+            avoidance = float(np.clip(genome[i+4], AVOID_MIN, AVOID_MAX))
+        except Exception:
+            # Fallback to defaults for a single escaper if decoding fails
+            return example_config()['escapers']
         escapers.append({
             'border': border,
             'coord': coord,
@@ -60,121 +83,149 @@ def decode_escaper(genome):
         })
     return escapers
 
-# --- Evaluation functions ---
-def evaluate_predator(pred_ind, escapers=None):
-    cfg = example_config()
+# --- Decode predator genome into config (assign prox_r per swarm) ---
+def apply_predator_genome(cfg, pred_genome):
+    if pred_genome is None or len(pred_genome) == 0:
+        return
     idx = 0
-    for p in cfg['predators']:
-        for _ in range(p['count']):
-            p['prox_r'] = pred_ind[idx]
-            idx += 1
-    if escapers:
-        cfg['escapers'] = escapers
-    sim = HuntedSim(cfg)
-    stats, _ = sim.run()
-    return (stats['F'],)
-
-def evaluate_escaper(esc_ind, predators=None):
-    cfg = example_config()
-    cfg['escapers'] = decode_escaper(esc_ind)
-    if predators:
-        idx = 0
-        for p in cfg['predators']:
-            for _ in range(p['count']):
-                p['prox_r'] = predators[idx]
+    # assign prox_r sequentially to individuals; here we keep group's prox_r = first individual's value
+    for group in cfg['predators']:
+        radii = []
+        for _ in range(group['count']):
+            if idx < len(pred_genome):
+                radii.append(float(np.clip(pred_genome[idx], PREDATOR_MIN, PREDATOR_MAX)))
                 idx += 1
-    sim = HuntedSim(cfg)
-    stats, _ = sim.run()
-    return (stats['F'],)
+        if radii:
+            group['prox_r'] = radii[0]
+
+# --- Universal Evaluation Function (robust) ---
+def evaluate(individual, opponent_genome, individual_type):
+    """
+    individual_type: 'predator' or 'escaper'
+    opponent_genome: genome of the opponent (may be None)
+    """
+    cfg = example_config()
+    # apply genomes to cfg
+    try:
+        if individual_type == 'predator':
+            # individual = predator genome
+            apply_predator_genome(cfg, individual)
+            cfg['escapers'] = decode_escaper(opponent_genome)
+        else:
+            # individual is escaper genome
+            apply_predator_genome(cfg, opponent_genome)
+            cfg['escapers'] = decode_escaper(individual)
+
+        # Run sim with try/except to catch runtime errors inside HuntedSim
+        sim = HuntedSim(cfg, seed=random.randint(0, 10000))
+        stats, _ = sim.run()
+        print(f".", end='', flush=True)
+
+        if individual_type == 'predator':
+            return (stats['F'],)
+        else:
+            return (-stats['F'],)
+    except Exception as e:
+        # Print traceback for debugging and return a large penalty
+        print("ERROR during simulation (type={}):".format(individual_type))
+        traceback.print_exc()
+        # Return a penalized fitness: large positive for predator (minimize), large negative for escaper (maximize)
+        if individual_type == 'predator':
+            return (1e9,)
+        else:
+            return (-1e9,)
+
+    # Predator minimizes F, Escaper wants to maximize F so we return -F (since FitnessMin)
 
 # --- Escaper mutation (custom, handles mix of discrete + floats) ---
-def mutate_escaper(individual, indpb_border=0.02, indpb_float=0.1):
+def mutate_escaper(individual, indpb=0.1):
     for i in range(0, len(individual), 5):
-        # border index
-        if random.random() < indpb_border:
+        if random.random() < indpb:
             individual[i] = random.randrange(0, len(BORDERS))
-        # coord
-        if random.random() < indpb_float:
+        if random.random() < indpb:
             individual[i+1] = random.uniform(COORD_MIN, COORD_MAX)
-        # speed
-        if random.random() < indpb_float:
+        if random.random() < indpb:
             individual[i+2] = random.uniform(SPEED_MIN, SPEED_MAX)
-        # time
-        if random.random() < indpb_float:
+        if random.random() < indpb:
             individual[i+3] = random.uniform(TIME_MIN, TIME_MAX)
-        # avoidance
-        if random.random() < indpb_float:
+        if random.random() < indpb:
             individual[i+4] = random.uniform(AVOID_MIN, AVOID_MAX)
     return (individual,)
 
-# --- DEAP creator setup ---
-creator.create("FitnessMin", base.Fitness, weights=(-1.0,))
-creator.create("Predator", list, fitness=creator.FitnessMin)
-creator.create("Escaper", list, fitness=creator.FitnessMin)
+def main():
+    # --- Toolbox setup ---
+    toolbox_pred = base.Toolbox()
+    toolbox_pred.register("individual", tools.initIterate, creator.Predator, predator_init)
+    toolbox_pred.register("population", tools.initRepeat, list, toolbox_pred.individual)
+    toolbox_pred.register("mate", tools.cxUniform, indpb=0.5)
+    toolbox_pred.register("mutate",
+                         tools.mutPolynomialBounded,
+                         low=PREDATOR_MIN,
+                         up=PREDATOR_MAX,
+                         eta=20.0,
+                         indpb=0.1)
+    toolbox_pred.register("select", tools.selTournament, tournsize=3)
 
-# --- Toolbox setup ---
-toolbox_pred = base.Toolbox()
-toolbox_pred.register("individual", tools.initIterate, creator.Predator, predator_init)
-toolbox_pred.register("population", tools.initRepeat, list, toolbox_pred.individual)
-toolbox_pred.register("mate", tools.cxUniform, indpb=0.5)
-toolbox_pred.register(
-    "mutate",
-    tools.mutPolynomialBounded,
-    low=PREDATOR_MIN,
-    up=PREDATOR_MAX,
-    eta=20.0,
-    indpb=1.0/PREDATOR_COUNT
-)
-toolbox_pred.register("select", tools.selTournament, tournsize=3)
+    toolbox_esc = base.Toolbox()
+    toolbox_esc.register("individual", tools.initIterate, creator.Escaper, escaper_init)
+    toolbox_esc.register("population", tools.initRepeat, list, toolbox_esc.individual)
+    toolbox_esc.register("mate", tools.cxBlend, alpha=0.5)
+    toolbox_esc.register("mutate", mutate_escaper, indpb=0.1)
+    toolbox_esc.register("select", tools.selTournament, tournsize=3)
 
-toolbox_esc = base.Toolbox()
-toolbox_esc.register("individual", tools.initIterate, creator.Escaper, escaper_init)
-toolbox_esc.register("population", tools.initRepeat, list, toolbox_esc.individual)
-toolbox_esc.register("mate", tools.cxUniform, indpb=0.5)
-toolbox_esc.register("mutate", mutate_escaper)
-toolbox_esc.register("select", tools.selTournament, tournsize=3)
+    # --- Create pool inside main (safe on Windows) ---
+    pool = multiprocessing.Pool()
+    toolbox_pred.register("map", pool.map)
+    toolbox_esc.register("map", pool.map)
 
-# --- Parallelization ---
-pool = multiprocessing.Pool()
-toolbox_pred.register("map", pool.map)
-toolbox_esc.register("map", pool.map)
-
-# --- Main coevolution loop ---
-def coevolution():
     pop_pred = toolbox_pred.population(n=POP_SIZE)
     pop_esc = toolbox_esc.population(n=POP_SIZE)
     hof_pred = tools.HallOfFame(HOF_SIZE)
     hof_esc = tools.HallOfFame(HOF_SIZE)
 
+    print("--- Starting Co-evolution ---")
     for gen in range(NGEN):
-        # evaluate predators
-        fitnesses_pred = toolbox_pred.map(evaluate_predator, pop_pred)
+        # Choose best opponent genome (or None if HOF empty)
+        best_esc_genome = list(hof_esc)[0] if len(hof_esc) > 0 else None
+        best_pred_genome = list(hof_pred)[0] if len(hof_pred) > 0 else None
+
+        # Evaluate predators vs chosen escaper
+        eval_pred_func = partial(evaluate, opponent_genome=best_esc_genome, individual_type='predator')
+        fitnesses_pred = toolbox_pred.map(eval_pred_func, pop_pred)
         for ind, fit in zip(pop_pred, fitnesses_pred):
             ind.fitness.values = fit
         hof_pred.update(pop_pred)
 
-        # evaluate escapers
-        fitnesses_esc = toolbox_esc.map(evaluate_escaper, pop_esc)
+        # Evaluate escapers vs chosen predator
+        eval_esc_func = partial(evaluate, opponent_genome=best_pred_genome, individual_type='escaper')
+        fitnesses_esc = toolbox_esc.map(eval_esc_func, pop_esc)
         for ind, fit in zip(pop_esc, fitnesses_esc):
             ind.fitness.values = fit
         hof_esc.update(pop_esc)
 
-        # GA steps
-        pop_pred = toolbox_pred.select(
-            algorithms.varAnd(pop_pred, toolbox_pred, CXPB, 1.0/PREDATOR_COUNT),
-            POP_SIZE
-        )
-        pop_esc = toolbox_esc.select(
-            algorithms.varAnd(pop_esc, toolbox_esc, CXPB, 1.0/(ESCAPER_COUNT*5)),
-            POP_SIZE
-        )
+        # Evolve: selection + variation
+        offspring_pred = toolbox_pred.select(pop_pred, k=len(pop_pred))
+        offspring_pred = algorithms.varAnd(offspring_pred, toolbox_pred, cxpb=CXPB, mutpb=MUTPB_PRED)
+        pop_pred[:] = offspring_pred
 
-        print(f"Gen {gen}: Predator best {hof_pred[0].fitness.values[0]:.2f}, Escaper best {hof_esc[0].fitness.values[0]:.2f}")
+        offspring_esc = toolbox_esc.select(pop_esc, k=len(pop_esc))
+        offspring_esc = algorithms.varAnd(offspring_esc, toolbox_esc, cxpb=CXPB, mutpb=MUTPB_ESC)
+        pop_esc[:] = offspring_esc
 
-    return hof_pred, hof_esc
+        # Safe printing: HOF may be empty in early generations
+        pred_best = hof_pred[0].fitness.values[0] if len(hof_pred) > 0 else float('nan')
+        esc_best = -hof_esc[0].fitness.values[0] if len(hof_esc) > 0 else float('nan')  # negate to show positive F
+        print(f"Gen {gen:02d}: Predator Best F: {pred_best:.2f} | Escaper Best F: {esc_best:.2f}")
+
+    print("--- Co-evolution Finished ---")
+    if len(hof_pred) > 0:
+        print("Best predator genome:", hof_pred[0])
+    if len(hof_esc) > 0:
+        print("Best escaper genome:", hof_esc[0])
+
+    pool.close()
+    pool.join()
+
 
 if __name__ == "__main__":
-    hof_pred, hof_esc = coevolution()
-    print("Best predator config:", hof_pred[0])
-    print("Best escaper config:", hof_esc[0])
-    pool.close(); pool.join()
+    main()

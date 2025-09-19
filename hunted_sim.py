@@ -6,7 +6,7 @@ from collections import defaultdict
 
 # Optional: ROSSERL generator using scipy if available
 try:
-    from scipy.integrate import odeint
+    from scipy.integrate import solve_ivp
     SCIPY_AVAILABLE = True
 except Exception:
     SCIPY_AVAILABLE = False
@@ -34,18 +34,25 @@ class ChaoticRho:
             # classic logistic map r=4
             self.x = 4.0 * self.x * (1.0 - self.x)
             return float(self.x)
+# Inside the next_rho method in hunted_sim.py
+
         elif self.method == 'rossler':
-            # integrate a small step from current state and use e.g. x mod 1
-            def rossler(s, t):
+            # solve_ivp expects the function signature rossler(t, s)
+            def rossler(t, s):
                 x, y, z = s
                 dx = -y - z
                 dy = x + self.a*y
                 dz = self.b + z*(x - self.c)
                 return [dx, dy, dz]
-            t = np.linspace(0, 0.5, 5)
-            sol = odeint(rossler, self.state, t)
-            self.state = sol[-1]
-            # use x coordinate normalized to [0,1]
+
+            t_span = [0, 0.5]
+            # Use a solver better suited for "stiff" problems, like 'BDF'
+            sol = solve_ivp(rossler, t_span, self.state, method='BDF') 
+
+            # The result is stored differently in the new solver object
+            self.state = sol.y[:, -1]
+
+            # The rest of the function is the same
             x = self.state[0]
             rho = (math.tanh(x) + 1) / 2.0
             return float(rho)
@@ -53,11 +60,14 @@ class ChaoticRho:
             return random.random()
 
 # ---------- utility ----------
+# In hunted_sim.py
+
 def clamp_pos(p, xmin, xmax, ymin, ymax):
     x, y = p
     x = max(xmin, min(xmax, x))
     y = max(ymin, min(ymax, y))
-    return np.array([x, y])
+
+    return np.array([x, y], dtype=float)
 
 # ---------- vehicle & escaper ----------
 class Vehicle:
