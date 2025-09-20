@@ -180,10 +180,13 @@ class HuntedSim:
             self.escapers.append(esc); eid += 1
 
     def run(self, record_trajectories=False):
+
         traj = {'pred': defaultdict(list), 'esc': defaultdict(list)}
         # main loop
         for t in range(self.max_ticks):
             time_s = t * self.dt
+            if t % 25 == 0:
+                print(f"    [Sim Tick {t}/{self.max_ticks}]", end='\r', flush=True)
             # start escapers at their escape_time
             for esc in self.escapers:
                 if (not esc.running) and (time_s >= esc.escape_time):

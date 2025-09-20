@@ -18,8 +18,8 @@ MUTPB_ESC = 1.0 / (len(example_config()['escapers']) * 5)
 
 # --- Predator genome constants ---
 PREDATOR_COUNT = sum([p['count'] for p in example_config()['predators']])
-PREDATOR_MIN = 5.0
-PREDATOR_MAX = 100.0
+PREDATOR_MIN = 2.0
+PREDATOR_MAX = 5.0
 
 # --- Escaper genome constants ---
 ESCAPER_COUNT = len(example_config()['escapers'])
@@ -104,6 +104,7 @@ def evaluate(individual, opponent_genome, individual_type):
     individual_type: 'predator' or 'escaper'
     opponent_genome: genome of the opponent (may be None)
     """
+    print(f"\n--> Evaluating {individual_type} starting with {individual[:3]}")
     cfg = example_config()
     # apply genomes to cfg
     try:
