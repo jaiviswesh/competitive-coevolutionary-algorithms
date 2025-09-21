@@ -1,4 +1,4 @@
-import numpy as np
+﻿import numpy as np
 import math
 import random
 import matplotlib.pyplot as plt
@@ -147,10 +147,10 @@ class HuntedSim:
         self.map_w = config.get('map_w', 400)
         self.map_h = config.get('map_h', 400)
         self.dt = config.get('dt', 1.0)  # 1 second per tick
-        self.max_ticks = int(config.get('sim_time', 100) / self.dt)  # Reduced sim_time to 100
+        self.max_ticks = int(config.get('sim_time', 600) / self.dt)
         self.vehicles = []
         self.escapers = []
-        self.chaos = ChaoticRho(seed=seed, method='logistic')  # Force 'logistic' method
+        self.chaos = ChaoticRho(seed=seed)
         self.init_agents(config)
 
     def init_agents(self, cfg):
@@ -179,8 +179,8 @@ class HuntedSim:
         # main loop
         for t in range(self.max_ticks):
             time_s = t * self.dt
-            # Only show progress every 100 ticks or at the last tick
-            if t % 100 == 0 or t == self.max_ticks - 1:
+            # Only show progress every 100 ticks instead of 25
+            if t % 100 == 0:
                 print(f"    [Sim Tick {t}/{self.max_ticks}]", end='\r', flush=True)
 
             # start escapers at their escape_time
@@ -261,9 +261,12 @@ class HuntedSim:
 # ---------- Example configuration (you can adjust to paper settings) ----------
 def example_config():
     predators = []
+    # 4 swarms of 4 UMVs (low speed, high detection range, 360deg)
+    for _ in range(4):
+        predators.append({'type':'UMV', 'count':4, 'speed':0.5, 'prox_r':30.0, 'detection_range':100.0, 'fov_deg':360})
     # 4 swarms of 4 UAVs (high speed, medium detection, zenithal camera => 360 in this sim)
     for _ in range(4):
-        predators.append({'type':'UAV', 'count':2, 'speed':2.0, 'prox_r':20.0, 'detection_range':80.0, 'fov_deg':360})
+        predators.append({'type':'UAV', 'count':4, 'speed':2.0, 'prox_r':20.0, 'detection_range':80.0, 'fov_deg':360})
     # 1 swarm of 2 UGVs
     predators.append({'type':'UGV', 'count':2, 'speed':1.0, 'prox_r':10.0, 'detection_range':40.0, 'fov_deg':90})
 
@@ -274,7 +277,10 @@ def example_config():
         {'border':'S', 'coord':300.0, 'speed':2.5, 'escape_time':0.0, 'avoidance':1.2},
         {'border':'W', 'coord':100.0, 'speed':4.0, 'escape_time':0.0, 'avoidance':0.8},
     ]
-    return {'predators':predators, 'escapers':escapers, 'map_w':400, 'map_h':400, 'sim_time':100}  # Reduced sim_time to 100
+    return {'predators':predators, 'escapers':escapers, 'map_w':400, 'map_h':400, 'sim_time':600}
+
+# ---------- run example ----------
+# In hunted_sim.py
 
 # ---------- run example ----------
 if __name__ == '__main__':
@@ -317,5 +323,4 @@ if __name__ == '__main__':
     plt.grid(True, linestyle=':', alpha=0.6)
     plt.legend(loc='best')
     plt.gca().set_aspect('equal', adjustable='box')
-    plt.savefig('simulation_plot.png')
-    plt.show(block=True)
+    plt.show()

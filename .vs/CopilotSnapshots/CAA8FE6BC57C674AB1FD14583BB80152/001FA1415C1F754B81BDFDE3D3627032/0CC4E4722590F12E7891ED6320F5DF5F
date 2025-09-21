@@ -1,4 +1,4 @@
-import numpy as np
+﻿import numpy as np
 import math
 import random
 import matplotlib.pyplot as plt
@@ -317,5 +317,4 @@ if __name__ == '__main__':
     plt.grid(True, linestyle=':', alpha=0.6)
     plt.legend(loc='best')
     plt.gca().set_aspect('equal', adjustable='box')
-    plt.savefig('simulation_plot.png')
-    plt.show(block=True)
+    plt.show()

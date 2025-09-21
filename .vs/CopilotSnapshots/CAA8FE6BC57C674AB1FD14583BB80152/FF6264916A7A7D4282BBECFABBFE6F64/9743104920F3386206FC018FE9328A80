@@ -1,10 +1,9 @@
-import random
+﻿import random
 import numpy as np
 import multiprocessing
 from functools import partial
 import traceback
 import sys
-import matplotlib.pyplot as plt
 
 from deap import base, creator, tools, algorithms
 from hunted_sim import HuntedSim, example_config
@@ -154,11 +153,6 @@ def mutate_escaper(individual, indpb=0.1):
             individual[i+4] = random.uniform(AVOID_MIN, AVOID_MAX)
     return (individual,)
 
-def init_worker():
-    """Initialize worker process to ignore keyboard interrupts"""
-    import signal
-    signal.signal(signal.SIGINT, signal.SIG_IGN)
-
 def main():
     # --- Toolbox setup ---
     toolbox_pred = base.Toolbox()
@@ -180,32 +174,32 @@ def main():
     toolbox_esc.register("mutate", mutate_escaper, indpb=0.1)
     toolbox_esc.register("select", tools.selTournament, tournsize=3)
 
-    # --- Create pool inside main with interrupt handling ---
-    pool = multiprocessing.Pool(initializer=init_worker)
+    # --- Create pool inside main (safe on Windows) ---
+    pool = multiprocessing.Pool()
     toolbox_pred.register("map", pool.map)
     toolbox_esc.register("map", pool.map)
 
+    pop_pred = toolbox_pred.population(n=POP_SIZE)
+    pop_esc = toolbox_esc.population(n=POP_SIZE)
+    hof_pred = tools.HallOfFame(HOF_SIZE)
+    hof_esc = tools.HallOfFame(HOF_SIZE)
+
+    print("\n=== Starting Co-evolution ===")
+    print(f"Population size: {POP_SIZE}")
+    print(f"Number of generations: {NGEN}")
+    print(f"Crossover probability: {CXPB}")
+    print(f"Predator mutation probability: {MUTPB_PRED:.4f}")
+    print(f"Escaper mutation probability: {MUTPB_ESC:.4f}\n")
+
+    stats_pred = tools.Statistics(lambda ind: ind.fitness.values[0])
+    stats_pred.register("min", np.min)
+    stats_pred.register("avg", np.mean)
+
+    stats_esc = tools.Statistics(lambda ind: -ind.fitness.values[0])  # Negate for escapers
+    stats_esc.register("max", np.max)
+    stats_esc.register("avg", np.mean)
+
     try:
-        pop_pred = toolbox_pred.population(n=POP_SIZE)
-        pop_esc = toolbox_esc.population(n=POP_SIZE)
-        hof_pred = tools.HallOfFame(HOF_SIZE)
-        hof_esc = tools.HallOfFame(HOF_SIZE)
-
-        print("\n=== Starting Co-evolution ===")
-        print(f"Population size: {POP_SIZE}")
-        print(f"Number of generations: {NGEN}")
-        print(f"Crossover probability: {CXPB}")
-        print(f"Predator mutation probability: {MUTPB_PRED:.4f}")
-        print(f"Escaper mutation probability: {MUTPB_ESC:.4f}\n")
-
-        stats_pred = tools.Statistics(lambda ind: ind.fitness.values[0])
-        stats_pred.register("min", np.min)
-        stats_pred.register("avg", np.mean)
-
-        stats_esc = tools.Statistics(lambda ind: -ind.fitness.values[0])  # Negate for escapers
-        stats_esc.register("max", np.max)
-        stats_esc.register("avg", np.mean)
-
         for gen in range(NGEN):
             print(f"\n--- Generation {gen+1}/{NGEN} ---")
             
@@ -252,61 +246,17 @@ def main():
         traceback.print_exc()
     finally:
         print("\n=== Co-evolution Summary ===")
-        best_pred = None
-        best_esc = None
         if len(hof_pred) > 0:
-            best_pred = hof_pred[0]
             print("\nBest predator genome:")
             print(f"Fitness: {hof_pred[0].fitness.values[0]:.2f}")
             print(f"Parameters: {hof_pred[0]}")
         if len(hof_esc) > 0:
-            best_esc = hof_esc[0]
             print("\nBest escaper genome:")
             print(f"Fitness: {-hof_esc[0].fitness.values[0]:.2f}")  # Negate back for display
             print(f"Parameters: {hof_esc[0]}")
 
-        # Clean shutdown of pool
         pool.close()
         pool.join()
-
-        # --- Plot best simulation ---
-        if best_pred is not None and best_esc is not None:
-            cfg = example_config()
-            apply_predator_genome(cfg, best_pred)
-            cfg['escapers'] = decode_escaper(best_esc)
-            sim = HuntedSim(cfg, seed=42)
-            stats, traj = sim.run(record_trajectories=True)
-            print("\nBest simulation stats:", stats)
-
-            plt.figure(figsize=(8, 8))
-            # --- Plot Predators (all red) ---
-            pred_label_set = False
-            for pid, tlist in traj['pred'].items():
-                arr = np.array(tlist)
-                if arr.shape[0] > 0:
-                    label = 'Predator' if not pred_label_set else '_nolegend_'
-                    plt.plot(arr[:,0], arr[:,1], color='red', linewidth=0.7, alpha=0.8, label=label)
-                    pred_label_set = True
-            # --- Plot Escapers (all blue) ---
-            esc_label_set = False
-            for eid, tlist in traj['esc'].items():
-                arr = np.array(tlist)
-                if arr.shape[0] > 0:
-                    label = 'Escaper' if not esc_label_set else '_nolegend_'
-                    plt.plot(arr[:,0], arr[:,1], '--', color='blue', linewidth=1.5, label=label)
-                    plt.scatter(arr[0,0], arr[0,1], color='blue', marker='x', s=100, label='_nolegend_')
-                    plt.scatter(arr[-1,0], arr[-1,1], color='blue', marker='o', s=80, facecolors='none', edgecolors='blue', label='_nolegend_')
-                    esc_label_set = True
-            plt.xlim(0, cfg['map_w'])
-            plt.ylim(0, cfg['map_h'])
-            plt.title('Agent Trajectories (Best Co-evolved)')
-            plt.xlabel('X Coordinate')
-            plt.ylabel('Y Coordinate')
-            plt.grid(True, linestyle=':', alpha=0.6)
-            plt.legend(loc='best')
-            plt.gca().set_aspect('equal', adjustable='box')
-            plt.savefig('best_simulation_plot.png')
-            plt.show(block=True)
 
 if __name__ == "__main__":
     main()
