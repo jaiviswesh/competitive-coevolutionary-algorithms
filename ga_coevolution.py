@@ -5,308 +5,243 @@ from functools import partial
 import traceback
 import sys
 import matplotlib.pyplot as plt
+from matplotlib.lines import Line2D
 
 from deap import base, creator, tools, algorithms
+# This script requires the final version of hunted_sim.py
 from hunted_sim import HuntedSim, example_config
 
 # --- GA parameters ---
 POP_SIZE = 20
-NGEN = 50
+NGEN = 500
 CXPB = 0.9  # Crossover probability
-# Mutation probabilities
-MUTPB_PRED = 1.0 / sum([p['count'] for p in example_config()['predators']])
-MUTPB_ESC = 1.0 / (len(example_config()['escapers']) * 5)
 
-# --- Predator genome constants ---
-PREDATOR_COUNT = sum([p['count'] for p in example_config()['predators']])
-PREDATOR_MIN = 2.0
-PREDATOR_MAX = 5.0
+# --- Genome & Simulation Constants ---
+cfg = example_config()
+DRONE_COUNT = sum([p['count'] for p in cfg['drones']])
+PREY_COUNT = len(cfg['prey'])
 
-# --- Escaper genome constants ---
-ESCAPER_COUNT = len(example_config()['escapers'])
-BORDERS = ['N', 'S', 'E', 'W']
-COORD_MIN, COORD_MAX = 0.0, 400.0
+# Bounds for the evolvable Boids parameters
+SEP_MIN, SEP_MAX = 0.0, 3.0  # Separation weight
+ALI_MIN, ALI_MAX = 0.0, 3.0  # Alignment weight
+COH_MIN, COH_MAX = 0.0, 3.0  # Cohesion weight
+
+# Prey genome constants
 SPEED_MIN, SPEED_MAX = 1.0, 5.0
-TIME_MIN, TIME_MAX = 0.0, 600.0
-AVOID_MIN, AVOID_MAX = 0.0, 2.0
+TIME_MIN, TIME_MAX = 0.0, cfg['sim_time']
+AVOID_MIN, AVOID_MAX = 0.0, 3.0
 
-# --- Hall of Fame size ---
 HOF_SIZE = 5
 
-# ------------- Safe creator setup -------------
-# Avoid re-creating creators if this file is executed multiple times in the same interpreter
+# --- DEAP Creator Setup ---
 if "FitnessMin" not in creator.__dict__:
     creator.create("FitnessMin", base.Fitness, weights=(-1.0,))
-if "Predator" not in creator.__dict__:
-    creator.create("Predator", list, fitness=creator.FitnessMin)
-if "Escaper" not in creator.__dict__:
-    creator.create("Escaper", list, fitness=creator.FitnessMin)
+if "Drone" not in creator.__dict__:
+    creator.create("Drone", list, fitness=creator.FitnessMin)
+if "FitnessMax" not in creator.__dict__:
+    creator.create("FitnessMax", base.Fitness, weights=(1.0,))
+if "Prey" not in creator.__dict__:
+    creator.create("Prey", list, fitness=creator.FitnessMax)
 
-# --- Predator individual: list of prox radii ---
-def predator_init():
-    return [random.uniform(PREDATOR_MIN, PREDATOR_MAX) for _ in range(PREDATOR_COUNT)]
-
-# --- Escaper individual ---
-def escaper_init():
+# --- Genome Initializers ---
+def drone_init():
+    """Genome is a flat list of [sep1, ali1, coh1, sep2, ali2, coh2, ...]"""
     genome = []
-    for _ in range(ESCAPER_COUNT):
-        border = random.choice(BORDERS)
-        coord = random.uniform(COORD_MIN, COORD_MAX)
-        speed = random.uniform(SPEED_MIN, SPEED_MAX)
-        time = random.uniform(TIME_MIN, TIME_MAX)
-        avoidance = random.uniform(AVOID_MIN, AVOID_MAX)
-        genome.extend([BORDERS.index(border), coord, speed, time, avoidance])
+    for _ in range(DRONE_COUNT):
+        genome.extend([
+            random.uniform(SEP_MIN, SEP_MAX),
+            random.uniform(ALI_MIN, ALI_MAX),
+            random.uniform(COH_MIN, COH_MAX),
+        ])
     return genome
 
-# --- Decode escaper genome into list of dicts for simulator ---
-def decode_escaper(genome):
-    # If None or empty, return default escapers
-    if genome is None or len(genome) == 0:
-        return example_config()['escapers']
-    escapers = []
-    for i in range(0, len(genome), 5):
-        try:
-            border_idx = int(round(genome[i])) % len(BORDERS)
-            border = BORDERS[border_idx]
-            coord = float(np.clip(genome[i+1], COORD_MIN, COORD_MAX))
-            speed = float(np.clip(genome[i+2], SPEED_MIN, SPEED_MAX))
-            time = float(np.clip(genome[i+3], TIME_MIN, TIME_MAX))
-            avoidance = float(np.clip(genome[i+4], AVOID_MIN, AVOID_MAX))
-        except Exception:
-            # Fallback to defaults for a single escaper if decoding fails
-            return example_config()['escapers']
-        escapers.append({
-            'border': border,
-            'coord': coord,
-            'speed': speed,
-            'escape_time': time,
-            'avoidance': avoidance
+def prey_init():
+    """Genome defines evolved behaviors like speed, start time, and avoidance."""
+    genome = []
+    for _ in range(PREY_COUNT):
+        genome.extend([
+            0,  # Placeholder for unused border_idx gene
+            0,  # Placeholder for unused coord gene
+            random.uniform(SPEED_MIN, SPEED_MAX),
+            random.uniform(TIME_MIN, TIME_MAX),
+            random.uniform(AVOID_MIN, AVOID_MAX),
+        ])
+    return genome
+
+# --- Genome Decoders ---
+def apply_drone_genome(sim, drone_genome):
+    """Assigns the evolved Boids weights to each drone instance in the simulator."""
+    if drone_genome is None: return
+    for i, drone in enumerate(sim.drones):
+        idx = i * 3
+        if idx + 2 < len(drone_genome):
+            drone.sep_weight = drone_genome[idx]
+            drone.ali_weight = drone_genome[idx + 1]
+            drone.coh_weight = drone_genome[idx + 2]
+
+def decode_prey(prey_genome):
+    """Takes a prey genome and returns a list of config dictionaries."""
+    if prey_genome is None: return example_config()['prey']
+    prey_list = []
+    for i in range(0, len(prey_genome), 5):
+        prey_list.append({
+            'speed': float(np.clip(prey_genome[i+2], SPEED_MIN, SPEED_MAX)),
+            'escape_time': float(np.clip(prey_genome[i+3], TIME_MIN, TIME_MAX)),
+            'avoidance': float(np.clip(prey_genome[i+4], AVOID_MIN, AVOID_MAX)),
         })
-    return escapers
+    return prey_list
 
-# --- Decode predator genome into config (assign prox_r per swarm) ---
-def apply_predator_genome(cfg, pred_genome):
-    if pred_genome is None or len(pred_genome) == 0:
-        return
-    idx = 0
-    # assign prox_r sequentially to individuals; here we keep group's prox_r = first individual's value
-    for group in cfg['predators']:
-        radii = []
-        for _ in range(group['count']):
-            if idx < len(pred_genome):
-                radii.append(float(np.clip(pred_genome[idx], PREDATOR_MIN, PREDATOR_MAX)))
-                idx += 1
-        if radii:
-            group['prox_r'] = radii[0]
-
-# --- Universal Evaluation Function (robust) ---
+# --- Evaluation Function ---
 def evaluate(individual, opponent_genome, individual_type):
-    """
-    individual_type: 'predator' or 'escaper'
-    opponent_genome: genome of the opponent (may be None)
-    """
-    print(f"\n--> Evaluating {individual_type} starting with {individual[:3]}")
-    cfg = example_config()
-    # apply genomes to cfg
+    """Runs a simulation and returns the fitness score."""
     try:
-        if individual_type == 'predator':
-            # individual = predator genome
-            apply_predator_genome(cfg, individual)
-            cfg['escapers'] = decode_escaper(opponent_genome)
-        else:
-            # individual is escaper genome
-            apply_predator_genome(cfg, opponent_genome)
-            cfg['escapers'] = decode_escaper(individual)
-
-        # Run sim with try/except to catch runtime errors inside HuntedSim
+        cfg = example_config()
         sim = HuntedSim(cfg, seed=random.randint(0, 10000))
+
+        if individual_type == 'drone':
+            apply_drone_genome(sim, individual)
+            sim.update_prey_list(decode_prey(opponent_genome))
+        else: # individual is prey
+            apply_drone_genome(sim, opponent_genome)
+            sim.update_prey_list(decode_prey(individual))
+        
         stats, _ = sim.run()
-        print(f".", end='', flush=True)
-
-        if individual_type == 'predator':
-            return (stats['F'],)
-        else:
-            return (-stats['F'],)
-    except Exception as e:
-        # Print traceback for debugging and return a large penalty
-        print("ERROR during simulation (type={}):".format(individual_type))
+        print(".", end='', flush=True)
+        return (stats['F'],) # Return the score directly for both types
+    except Exception:
         traceback.print_exc()
-        # Return a penalized fitness: large positive for predator (minimize), large negative for escaper (maximize)
-        if individual_type == 'predator':
-            return (1e9,)
-        else:
-            return (-1e9,)
+        # Return a penalized (worst possible) fitness on crash
+        return (0.0,) if individual_type == 'drone' else (0.0,)
 
-    # Predator minimizes F, Escaper wants to maximize F so we return -F (since FitnessMin)
-
-# --- Escaper mutation (custom, handles mix of discrete + floats) ---
-def mutate_escaper(individual, indpb=0.1):
+# --- Custom Mutation for Prey ---
+def mutate_prey(individual, indpb=0.1):
     for i in range(0, len(individual), 5):
-        if random.random() < indpb:
-            individual[i] = random.randrange(0, len(BORDERS))
-        if random.random() < indpb:
-            individual[i+1] = random.uniform(COORD_MIN, COORD_MAX)
-        if random.random() < indpb:
-            individual[i+2] = random.uniform(SPEED_MIN, SPEED_MAX)
-        if random.random() < indpb:
-            individual[i+3] = random.uniform(TIME_MIN, TIME_MAX)
-        if random.random() < indpb:
-            individual[i+4] = random.uniform(AVOID_MIN, AVOID_MAX)
+        if random.random() < indpb: individual[i+2] = random.uniform(SPEED_MIN, SPEED_MAX)
+        if random.random() < indpb: individual[i+3] = random.uniform(TIME_MIN, TIME_MAX)
+        if random.random() < indpb: individual[i+4] = random.uniform(AVOID_MIN, AVOID_MAX)
     return (individual,)
 
-def init_worker():
-    """Initialize worker process to ignore keyboard interrupts"""
-    import signal
-    signal.signal(signal.SIGINT, signal.SIG_IGN)
+# --- Bounds enforcing decorator for Drone mutation ---
+def check_bounds(min_bounds, max_bounds):
+    """A decorator to clamp mutated values within the defined bounds."""
+    def decorator(func):
+        def wrapper(*args, **kwargs):
+            offspring = func(*args, **kwargs)
+            for i, (min_val, max_val) in enumerate(zip(min_bounds, max_bounds)):
+                offspring[0][i] = np.clip(offspring[0][i], min_val, max_val)
+            return offspring
+        return wrapper
+    return decorator
 
+# --- Plotting Function ---
+def plot_final_simulation(best_drone, best_prey):
+    """Runs one simulation with the best evolved agents and plots the result."""
+    print("\n--- Running final simulation to generate plot ---")
+    cfg = example_config()
+    sim = HuntedSim(cfg, seed=42)
+    apply_drone_genome(sim, best_drone)
+    sim.update_prey_list(decode_prey(best_prey))
+
+    stats, traj = sim.run(record_trajectories=True)
+    print("Stats from plotted simulation:", stats)
+
+    plt.figure(figsize=(8, 8))
+    for base_pos in sim.bases:
+        plt.scatter(base_pos[0], base_pos[1], c='green', marker='s', s=100, zorder=5)
+    
+    drone_label_set, prey_label_set = False, False
+    for tlist in traj['drone'].values():
+        arr = np.array(tlist)
+        if arr.shape[0] > 0:
+            label = 'Drone' if not drone_label_set else '_nolegend_'
+            plt.plot(arr[:,0], arr[:,1], color='blue', lw=0.7, alpha=0.8, label=label)
+            drone_label_set = True
+    for tlist in traj['prey'].values():
+        arr = np.array(tlist)
+        if arr.shape[0] > 0:
+            label = 'Prey' if not prey_label_set else '_nolegend_'
+            plt.plot(arr[:,0], arr[:,1], '--', color='red', lw=1.5, label=label)
+            plt.scatter(arr[0,0], arr[0,1], color='red', marker='x', s=100)
+            prey_label_set = True
+
+    handles, labels = plt.gca().get_legend_handles_labels()
+    base_handle = Line2D([0],[0], marker='s', color='w', label='Base', mfc='green', ms=10)
+    if "Base" not in labels: handles.append(base_handle)
+    
+    plt.xlim(0, cfg['map_w']); plt.ylim(0, cfg['map_h'])
+    plt.title('Base Defense Trajectories (Best Evolved Agents)'); plt.xlabel('X Coordinate'); plt.ylabel('Y Coordinate')
+    plt.grid(True, linestyle=':', alpha=0.6); plt.legend(handles=handles)
+    plt.gca().set_aspect('equal', adjustable='box'); plt.show()
+
+# --- Main Execution ---
 def main():
-    # --- Toolbox setup ---
-    toolbox_pred = base.Toolbox()
-    toolbox_pred.register("individual", tools.initIterate, creator.Predator, predator_init)
-    toolbox_pred.register("population", tools.initRepeat, list, toolbox_pred.individual)
-    toolbox_pred.register("mate", tools.cxUniform, indpb=0.5)
-    toolbox_pred.register("mutate",
-                         tools.mutPolynomialBounded,
-                         low=PREDATOR_MIN,
-                         up=PREDATOR_MAX,
-                         eta=20.0,
-                         indpb=0.1)
-    toolbox_pred.register("select", tools.selTournament, tournsize=3)
+    # --- Drone Toolbox Setup ---
+    toolbox_drone = base.Toolbox()
+    toolbox_drone.register("individual", tools.initIterate, creator.Drone, drone_init)
+    toolbox_drone.register("population", tools.initRepeat, list, toolbox_drone.individual)
+    toolbox_drone.register("mate", tools.cxUniform, indpb=0.5) # Switched to stable uniform crossover
+    # Switched to stable Gaussian mutation with a bounds decorator
+    low_bounds = [SEP_MIN, ALI_MIN, COH_MIN] * DRONE_COUNT
+    up_bounds = [SEP_MAX, ALI_MAX, COH_MAX] * DRONE_COUNT
+    toolbox_drone.register("mutate", tools.mutGaussian, mu=0, sigma=0.5, indpb=0.1)
+    toolbox_drone.decorate("mutate", check_bounds(low_bounds, up_bounds))
+    toolbox_drone.register("select", tools.selTournament, tournsize=3)
 
-    toolbox_esc = base.Toolbox()
-    toolbox_esc.register("individual", tools.initIterate, creator.Escaper, escaper_init)
-    toolbox_esc.register("population", tools.initRepeat, list, toolbox_esc.individual)
-    toolbox_esc.register("mate", tools.cxBlend, alpha=0.5)
-    toolbox_esc.register("mutate", mutate_escaper, indpb=0.1)
-    toolbox_esc.register("select", tools.selTournament, tournsize=3)
+    # --- Prey Toolbox Setup ---
+    toolbox_prey = base.Toolbox()
+    toolbox_prey.register("individual", tools.initIterate, creator.Prey, prey_init)
+    toolbox_prey.register("population", tools.initRepeat, list, toolbox_prey.individual)
+    toolbox_prey.register("mate", tools.cxBlend, alpha=0.5)
+    toolbox_prey.register("mutate", mutate_prey, indpb=0.1)
+    toolbox_prey.register("select", tools.selTournament, tournsize=3)
+    
+    # --- Evolution Start ---
+    pool = multiprocessing.Pool()
+    toolbox_drone.register("map", pool.map)
+    toolbox_prey.register("map", pool.map)
+    
+    pop_drone = toolbox_drone.population(n=POP_SIZE)
+    pop_prey = toolbox_prey.population(n=POP_SIZE)
+    hof_drone = tools.HallOfFame(HOF_SIZE)
+    hof_prey = tools.HallOfFame(HOF_SIZE)
+    
+    print("--- Starting Co-evolution (Boids Model) ---")
+    for gen in range(NGEN):
+        best_prey_genome = list(hof_prey)[0] if len(hof_prey) > 0 else None
+        best_drone_genome = list(hof_drone)[0] if len(hof_drone) > 0 else None
 
-    # --- Create pool inside main with interrupt handling ---
-    pool = multiprocessing.Pool(initializer=init_worker)
-    toolbox_pred.register("map", pool.map)
-    toolbox_esc.register("map", pool.map)
+        eval_drone_func = partial(evaluate, opponent_genome=best_prey_genome, individual_type='drone')
+        fitnesses_drone = toolbox_drone.map(eval_drone_func, pop_drone)
+        for ind, fit in zip(pop_drone, fitnesses_drone): ind.fitness.values = fit
+        hof_drone.update(pop_drone)
 
-    try:
-        pop_pred = toolbox_pred.population(n=POP_SIZE)
-        pop_esc = toolbox_esc.population(n=POP_SIZE)
-        hof_pred = tools.HallOfFame(HOF_SIZE)
-        hof_esc = tools.HallOfFame(HOF_SIZE)
+        eval_prey_func = partial(evaluate, opponent_genome=best_drone_genome, individual_type='prey')
+        fitnesses_prey = toolbox_prey.map(eval_prey_func, pop_prey)
+        for ind, fit in zip(pop_prey, fitnesses_prey): ind.fitness.values = fit
+        hof_prey.update(pop_prey)
 
-        print("\n=== Starting Co-evolution ===")
-        print(f"Population size: {POP_SIZE}")
-        print(f"Number of generations: {NGEN}")
-        print(f"Crossover probability: {CXPB}")
-        print(f"Predator mutation probability: {MUTPB_PRED:.4f}")
-        print(f"Escaper mutation probability: {MUTPB_ESC:.4f}\n")
+        offspring_drone = algorithms.varAnd(pop_drone, toolbox_drone, CXPB, 1.0)
+        pop_drone[:] = toolbox_drone.select(offspring_drone, k=len(offspring_drone))
+        
+        offspring_prey = algorithms.varAnd(pop_prey, toolbox_prey, CXPB, 1.0)
+        pop_prey[:] = toolbox_prey.select(offspring_prey, k=len(offspring_prey))
 
-        stats_pred = tools.Statistics(lambda ind: ind.fitness.values[0])
-        stats_pred.register("min", np.min)
-        stats_pred.register("avg", np.mean)
+        drone_best_F = hof_drone[0].fitness.values[0] if len(hof_drone) > 0 else float('nan')
+        prey_best_F = hof_prey[0].fitness.values[0] if len(hof_prey) > 0 else float('nan')
+        print(f"\nGen {gen:02d}: Drone Best F (min): {drone_best_F:.2f} | Prey Best F (max): {prey_best_F:.2f}")
 
-        stats_esc = tools.Statistics(lambda ind: -ind.fitness.values[0])  # Negate for escapers
-        stats_esc.register("max", np.max)
-        stats_esc.register("avg", np.mean)
+    print("\n--- Co-evolution Finished ---")
+    best_drone = list(hof_drone)[0] if len(hof_drone) > 0 else None
+    best_prey = list(hof_prey)[0] if len(hof_prey) > 0 else None
 
-        for gen in range(NGEN):
-            print(f"\n--- Generation {gen+1}/{NGEN} ---")
-            
-            # Choose best opponent genome (or None if HOF empty)
-            best_esc_genome = list(hof_esc)[0] if len(hof_esc) > 0 else None
-            best_pred_genome = list(hof_pred)[0] if len(hof_pred) > 0 else None
+    if best_drone: print("Best drone genome:", best_drone)
+    if best_prey: print("Best prey genome:", best_prey)
 
-            # Evaluate predators vs chosen escaper
-            eval_pred_func = partial(evaluate, opponent_genome=best_esc_genome, individual_type='predator')
-            fitnesses_pred = toolbox_pred.map(eval_pred_func, pop_pred)
-            for ind, fit in zip(pop_pred, fitnesses_pred):
-                ind.fitness.values = fit
-            hof_pred.update(pop_pred)
-
-            # Get statistics for predators
-            pred_stats = stats_pred.compile(pop_pred)
-            print(f"Predator Best F: {pred_stats['min']:.2f}, Avg F: {pred_stats['avg']:.2f}")
-
-            # Evaluate escapers vs chosen predator
-            eval_esc_func = partial(evaluate, opponent_genome=best_pred_genome, individual_type='escaper')
-            fitnesses_esc = toolbox_esc.map(eval_esc_func, pop_esc)
-            for ind, fit in zip(pop_esc, fitnesses_esc):
-                ind.fitness.values = fit
-            hof_esc.update(pop_esc)
-
-            # Get statistics for escapers
-            esc_stats = stats_esc.compile(pop_esc)
-            print(f"Escaper Best F: {esc_stats['max']:.2f}, Avg F: {esc_stats['avg']:.2f}")
-
-            # Evolve: selection + variation
-            offspring_pred = toolbox_pred.select(pop_pred, k=len(pop_pred))
-            offspring_pred = algorithms.varAnd(offspring_pred, toolbox_pred, cxpb=CXPB, mutpb=MUTPB_PRED)
-            pop_pred[:] = offspring_pred
-
-            offspring_esc = toolbox_esc.select(pop_esc, k=len(pop_esc))
-            offspring_esc = algorithms.varAnd(offspring_esc, toolbox_esc, cxpb=CXPB, mutpb=MUTPB_ESC)
-            pop_esc[:] = offspring_esc
-
-    except KeyboardInterrupt:
-        print("\nEvolution interrupted by user")
-    except Exception as e:
-        print(f"\nError during evolution: {str(e)}")
-        import traceback
-        traceback.print_exc()
-    finally:
-        print("\n=== Co-evolution Summary ===")
-        best_pred = None
-        best_esc = None
-        if len(hof_pred) > 0:
-            best_pred = hof_pred[0]
-            print("\nBest predator genome:")
-            print(f"Fitness: {hof_pred[0].fitness.values[0]:.2f}")
-            print(f"Parameters: {hof_pred[0]}")
-        if len(hof_esc) > 0:
-            best_esc = hof_esc[0]
-            print("\nBest escaper genome:")
-            print(f"Fitness: {-hof_esc[0].fitness.values[0]:.2f}")  # Negate back for display
-            print(f"Parameters: {hof_esc[0]}")
-
-        # Clean shutdown of pool
-        pool.close()
-        pool.join()
-
-        # --- Plot best simulation ---
-        if best_pred is not None and best_esc is not None:
-            cfg = example_config()
-            apply_predator_genome(cfg, best_pred)
-            cfg['escapers'] = decode_escaper(best_esc)
-            sim = HuntedSim(cfg, seed=42)
-            stats, traj = sim.run(record_trajectories=True)
-            print("\nBest simulation stats:", stats)
-
-            plt.figure(figsize=(8, 8))
-            # --- Plot Predators (all red) ---
-            pred_label_set = False
-            for pid, tlist in traj['pred'].items():
-                arr = np.array(tlist)
-                if arr.shape[0] > 0:
-                    label = 'Predator' if not pred_label_set else '_nolegend_'
-                    plt.plot(arr[:,0], arr[:,1], color='red', linewidth=0.7, alpha=0.8, label=label)
-                    pred_label_set = True
-            # --- Plot Escapers (all blue) ---
-            esc_label_set = False
-            for eid, tlist in traj['esc'].items():
-                arr = np.array(tlist)
-                if arr.shape[0] > 0:
-                    label = 'Escaper' if not esc_label_set else '_nolegend_'
-                    plt.plot(arr[:,0], arr[:,1], '--', color='blue', linewidth=1.5, label=label)
-                    plt.scatter(arr[0,0], arr[0,1], color='blue', marker='x', s=100, label='_nolegend_')
-                    plt.scatter(arr[-1,0], arr[-1,1], color='blue', marker='o', s=80, facecolors='none', edgecolors='blue', label='_nolegend_')
-                    esc_label_set = True
-            plt.xlim(0, cfg['map_w'])
-            plt.ylim(0, cfg['map_h'])
-            plt.title('Agent Trajectories (Best Co-evolved)')
-            plt.xlabel('X Coordinate')
-            plt.ylabel('Y Coordinate')
-            plt.grid(True, linestyle=':', alpha=0.6)
-            plt.legend(loc='best')
-            plt.gca().set_aspect('equal', adjustable='box')
-            plt.savefig('best_simulation_plot.png')
-            plt.show(block=True)
+    pool.close()
+    pool.join()
+    
+    if best_drone and best_prey:
+        plot_final_simulation(best_drone, best_prey)
 
 if __name__ == "__main__":
     main()

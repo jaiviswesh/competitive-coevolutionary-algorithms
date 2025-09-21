@@ -1,321 +1,239 @@
+import random
 import numpy as np
 import math
-import random
 import matplotlib.pyplot as plt
 from collections import defaultdict
 
-# Optional: ROSSERL generator using scipy if available
-try:
-    from scipy.integrate import solve_ivp
-    SCIPY_AVAILABLE = True
-except Exception:
-    SCIPY_AVAILABLE = False
+# This script is now a library for ga_coevolution.py
+# The if __name__ == '__main__' block is for simple, standalone testing.
 
-# ---------- chaotic generator ----------
 class ChaoticRho:
-    def __init__(self, seed=1, method='auto'):
-        self.rng = random.Random(seed)
-        self.method = method
-        if method == 'auto' and SCIPY_AVAILABLE:
-            self.method = 'rossler'
-        elif method == 'auto':
-            self.method = 'logistic'
-        # logistic map state
-        self.x = self.rng.random()
-
-        # roessler state if used
-        if self.method == 'rossler':
-            # Rössler parameters known to be chaotic
-            self.a, self.b, self.c = 0.2, 0.2, 5.7
-            self.state = np.array([0.1 + 0.01*seed, 0.0, 0.0])
-
+    """Simple and stable chaotic number generator."""
+    def __init__(self, seed=1):
+        self.x = random.Random(seed).random()
     def next_rho(self):
-        if self.method == 'logistic':
-            # classic logistic map r=4
-            self.x = 4.0 * self.x * (1.0 - self.x)
-            return float(self.x)
-        elif self.method == 'rossler':
-            # solve_ivp expects the function signature rossler(t, s)
-            def rossler(t, s):
-                x, y, z = s
-                dx = -y - z
-                dy = x + self.a*y
-                dz = self.b + z*(x - self.c)
-                return [dx, dy, dz]
-
-            t_span = [0, 0.5]
-            # Use a faster solver with fewer steps
-            sol = solve_ivp(rossler, t_span, self.state, method='RK45', max_step=0.1)
-            self.state = sol.y[:, -1]
-            x = self.state[0]
-            rho = (math.tanh(x) + 1) / 2.0
-            return float(rho)
-        else:
-            return self.rng.random()
-
-# ---------- utility ----------
-# In hunted_sim.py
+        self.x = 4.0 * self.x * (1.0 - self.x)
+        return float(self.x)
 
 def clamp_pos(p, xmin, xmax, ymin, ymax):
-    x, y = p
-    x = max(xmin, min(xmax, x))
-    y = max(ymin, min(ymax, y))
+    """Keeps agent positions within the map boundaries."""
+    p[0] = np.clip(p[0], xmin, xmax)
+    p[1] = np.clip(p[1], ymin, ymax)
+    return p
 
-    return np.array([x, y], dtype=float)
-
-# ---------- vehicle & escaper ----------
-class Vehicle:
-    def __init__(self, id, typ, pos, angle, speed, prox_radius, detection_range, fov_deg):
+class Drone:
+    """Represents a predator agent with Boids behavior."""
+    def __init__(self, id, typ, pos, angle, speed, detection_range, fov_deg):
         self.id = id
-        self.typ = typ  # 'UAV','UGV','UMV'
+        self.typ = typ
         self.pos = np.array(pos, dtype=float)
-        self.angle = angle  # radians
-        self.speed = speed  # meters per tick
-        self.r = prox_radius
+        self.angle = angle
+        self.speed = speed
         self.detection_range = detection_range
-        self.fov = math.radians(fov_deg)  # in radians
+        self.fov = math.radians(fov_deg)
+        self.velocity = np.array([math.cos(angle), math.sin(angle)]) * speed
+        # Evolved Boids weights will be assigned by the GA
+        self.sep_weight = 1.0
+        self.ali_weight = 1.0
+        self.coh_weight = 1.0
 
-    def step_move(self, turn):
-        self.angle += turn
-        dx = math.cos(self.angle) * self.speed
-        dy = math.sin(self.angle) * self.speed
-        self.pos += np.array([dx, dy])
+    def step_move(self, turn_angle):
+        self.angle += turn_angle
+        self.angle = (self.angle + math.pi) % (2 * math.pi) - math.pi # Normalize angle
+        self.velocity = np.array([math.cos(self.angle), math.sin(self.angle)]) * self.speed
+        self.pos += self.velocity
 
     def can_detect(self, target_pos):
-        d = np.linalg.norm(target_pos - self.pos)
-        if d > self.detection_range:
+        if np.linalg.norm(target_pos - self.pos) > self.detection_range:
             return False
-        # check field of view (if 360 deg, always true)
-        if self.fov >= 2*math.pi - 1e-6:
+        if self.fov >= 2 * math.pi:
             return True
         v_to_target = target_pos - self.pos
         ang = math.atan2(v_to_target[1], v_to_target[0])
-        diff = (ang - self.angle + math.pi) % (2*math.pi) - math.pi
-        return abs(diff) <= self.fov/2
+        diff = (ang - self.angle + math.pi) % (2 * math.pi) - math.pi
+        return abs(diff) <= self.fov / 2
 
-class Escaper:
-    def __init__(self, id, start_pos, border, coord_on_border, speed, escape_time, avoidance):
+class Prey:
+    """Represents a prey agent trying to reach a central base."""
+    def __init__(self, id, start_pos, target_base, speed, start_time, avoidance):
         self.id = id
         self.pos = np.array(start_pos, dtype=float)
-        self.border = border  # 'N','S','E','W'
-        self.coord_on_border = coord_on_border  # coordinate along border (x or y depending)
+        self.target_base = np.array(target_base, dtype=float)
         self.speed = speed
-        self.escape_time = escape_time
+        self.start_time = start_time
         self.avoidance = avoidance
         self.running = False
         self.detected = False
-        self.detect_distance = None
 
-    def target_point(self, map_w, map_h):
-        if self.border == 'N':
-            return np.array([self.coord_on_border, map_h])
-        if self.border == 'S':
-            return np.array([self.coord_on_border, 0.0])
-        if self.border == 'E':
-            return np.array([map_w, self.coord_on_border])
-        if self.border == 'W':
-            return np.array([0.0, self.coord_on_border])
-
-    def step_move(self, predators_positions, map_w, map_h, dt=1.0):
-        if not self.running:
-            return
-        tgt = self.target_point(map_w, map_h)
-        dir_vec = tgt - self.pos
-        if np.linalg.norm(dir_vec) < 1e-6:
-            return
-        dir_unit = dir_vec / np.linalg.norm(dir_vec)
-        # avoidance: compute repelling from predators within some neighborhood (use avoidance as strength)
-        repel = np.zeros(2)
-        for ppos in predators_positions:
-            dvec = self.pos - ppos
+    def step_move(self, drones_positions, dt=1.0):
+        if not self.running: return
+        
+        dir_vec = self.target_base - self.pos
+        dist_to_target = np.linalg.norm(dir_vec)
+        if dist_to_target < 1e-6: return # Already at target
+        
+        attraction_vec = dir_vec / dist_to_target
+        repulsion_vec = np.zeros(2)
+        for dpos in drones_positions:
+            dvec = self.pos - dpos
             d = np.linalg.norm(dvec)
-            if d <= 0:
-                continue
-            # only apply if within some avoidance radius (say 30 m)
-            if d < 30.0:
-                repel += (dvec / (d**2 + 1e-6))
-        move_dir = dir_unit + self.avoidance * repel
-        if np.linalg.norm(move_dir) == 0:
-            return
-        move_unit = move_dir / np.linalg.norm(move_dir)
-        self.pos += move_unit * self.speed * dt
+            if 0 < d < 50.0: # Avoidance radius of 50m
+                repulsion_vec += (dvec / d**2) # Inverse square law
+        
+        move_dir = attraction_vec + self.avoidance * repulsion_vec
+        if np.linalg.norm(move_dir) == 0: return
+        
+        self.pos += (move_dir / np.linalg.norm(move_dir)) * self.speed * dt
 
-# ---------- Simulator ----------
 class HuntedSim:
+    """The main simulation engine."""
     def __init__(self, config, seed=0):
         self.rng = random.Random(seed)
         self.map_w = config.get('map_w', 400)
         self.map_h = config.get('map_h', 400)
-        self.dt = config.get('dt', 1.0)  # 1 second per tick
-        self.max_ticks = int(config.get('sim_time', 100) / self.dt)  # Reduced sim_time to 100
-        self.vehicles = []
-        self.escapers = []
-        self.chaos = ChaoticRho(seed=seed, method='logistic')  # Force 'logistic' method
-        self.init_agents(config)
+        self.dt = config.get('dt', 1.0)
+        self.max_ticks = int(config.get('sim_time', 600) / self.dt)
+        self.drones = []
+        self.prey = []
+        self.chaos = ChaoticRho(seed=seed)
+        
+        # Define the four bases in the center
+        center_x, center_y = self.map_w / 2, self.map_h / 2
+        base_side = math.sqrt(40000) # 400m^2 area -> 20m side
+        half_base = base_side / 2
+        self.bases = [
+            np.array([center_x - half_base, center_y - half_base]), # Bottom-left
+            np.array([center_x + half_base, center_y - half_base]), # Bottom-right
+            np.array([center_x - half_base, center_y + half_base]), # Top-left
+            np.array([center_x + half_base, center_y + half_base])  # Top-right
+        ]
+        self.init_drones(config['drones'])
+        self.init_prey(config['prey'])
 
-    def init_agents(self, cfg):
-        # create predators according to cfg['predators'] list of dicts
-        vid = 0
-        for p in cfg['predators']:
-            for i in range(p['count']):
-                pos = np.array([self.rng.uniform(0,self.map_w), self.rng.uniform(0,self.map_h)])
+    def init_drones(self, drones_cfg):
+        did = 0
+        center = np.array([self.map_w / 2.0, self.map_h / 2.0])
+        for group_cfg in drones_cfg:
+            for _ in range(group_cfg['count']):
+                r = self.rng.uniform(0, 10)
+                theta = self.rng.uniform(0, 2 * math.pi)
+                pos = center + np.array([math.cos(theta) * r, math.sin(theta) * r])
                 angle = self.rng.uniform(-math.pi, math.pi)
-                v = Vehicle(vid, p['type'], pos, angle, p['speed'], p['prox_r'], p['detection_range'], p['fov_deg'])
-                self.vehicles.append(v); vid += 1
-        # escapers: place near center (paper had restricted area center)
-        eid = 0
-        center = np.array([self.map_w/2.0, self.map_h/2.0])
-        for e in cfg['escapers']:
-            # spawn within small radius of center
-            r = self.rng.uniform(0,5)
-            theta = self.rng.uniform(0, 2*math.pi)
-            start = center + np.array([math.cos(theta)*r, math.sin(theta)*r])
-            esc = Escaper(eid, start, e['border'], e['coord'], e['speed'], e['escape_time'], e['avoidance'])
-            self.escapers.append(esc); eid += 1
+                drone = Drone(did, group_cfg['type'], pos, angle, group_cfg['speed'],
+                              group_cfg['detection_range'], group_cfg['fov_deg'])
+                self.drones.append(drone)
+                did += 1
+
+    def init_prey(self, prey_cfg):
+        pid = 0
+        for e_cfg in prey_cfg:
+            edge = self.rng.choice(['N', 'S', 'E', 'W'])
+            if edge == 'N':   start_pos = [self.rng.uniform(0, self.map_w), self.map_h]
+            elif edge == 'S': start_pos = [self.rng.uniform(0, self.map_w), 0]
+            elif edge == 'E': start_pos = [self.map_w, self.rng.uniform(0, self.map_h)]
+            else:             start_pos = [0, self.rng.uniform(0, self.map_h)]
+            distances = [np.linalg.norm(np.array(start_pos) - base) for base in self.bases]
+            closest_base = self.bases[np.argmin(distances)]
+            prey = Prey(pid, start_pos, closest_base, e_cfg['speed'],
+                        e_cfg['escape_time'], e_cfg['avoidance'])
+            self.prey.append(prey)
+            pid += 1
+            
+    def update_prey_list(self, prey_cfg_list):
+        """Helper to allow the GA to inject new prey configurations."""
+        self.prey = []
+        self.init_prey(prey_cfg_list)
 
     def run(self, record_trajectories=False):
-        traj = {'pred': defaultdict(list), 'esc': defaultdict(list)}
-        
-        # main loop
+        traj = {'drone': defaultdict(list), 'prey': defaultdict(list)}
         for t in range(self.max_ticks):
             time_s = t * self.dt
-            # Only show progress every 100 ticks or at the last tick
-            if t % 100 == 0 or t == self.max_ticks - 1:
-                print(f"    [Sim Tick {t}/{self.max_ticks}]", end='\r', flush=True)
+            
+            for p in self.prey:
+                if not p.running and time_s >= p.start_time:
+                    p.running = True
 
-            # start escapers at their escape_time
-            for esc in self.escapers:
-                if (not esc.running) and (time_s >= esc.escape_time):
-                    esc.running = True
-            # compute predators positions array for escapers avoidance
-            pred_pos = [v.pos.copy() for v in self.vehicles]
+            drone_pos = [v.pos.copy() for v in self.drones]
+            for p in self.prey:
+                if not p.detected:
+                    p.step_move(drone_pos, dt=self.dt)
+                    p.pos = clamp_pos(p.pos, 0, self.map_w, 0, self.map_h)
 
-            # move escapers
-            for esc in self.escapers:
-                if not esc.detected and esc.running:
-                    esc.step_move(pred_pos, self.map_w, self.map_h, dt=self.dt)
-
-            # move predators: for each vehicle determine neighborhood; if empty use chaotic rule
-            for v in self.vehicles:
-                # find neighbors of same type within proximity radius r
-                neighbors = [u for u in self.vehicles if u is not v and u.typ==v.typ and np.linalg.norm(u.pos - v.pos) < v.r]
-                if neighbors:
-                    # compute repelling vector
-                    delta = np.zeros(2)
-                    for nv in neighbors:
-                        delta += (v.pos - nv.pos)
-                    # set angle towards atan2(delta)
-                    if np.linalg.norm(delta) > 1e-6:
-                        angle = math.atan2(delta[1], delta[0])
-                        v.angle = angle
-                        v.step_move(0.0)
-                else:
-                    # chaotic choice using rho
-                    rho = self.chaos.next_rho()
-                    if rho < 1/3:
-                        turn = -math.pi/4.0
-                    elif rho < 2/3:
-                        turn = math.pi/4.0
-                    else:
-                        turn = 0.0
-                    v.step_move(turn)
-
-                # clamp position inside map
-                v.pos = clamp_pos(v.pos, 0, self.map_w, 0, self.map_h)
-
-            # detections: if escaper not detected, check all predators for detection
-            for esc in self.escapers:
-                if esc.detected:
+            # --- Boids Drone Movement ---
+            NEIGHBOR_RADIUS, MAX_TURN = 50.0, math.pi/8
+            new_angles = {}
+            for v in self.drones:
+                neighbors = [u for u in self.drones if u is not v and np.linalg.norm(u.pos - v.pos) < NEIGHBOR_RADIUS]
+                if not neighbors:
+                    turn = (self.chaos.next_rho() - 0.5) * MAX_TURN
+                    new_angles[v.id] = v.angle + turn
                     continue
-                for v in self.vehicles:
-                    if v.can_detect(esc.pos):
-                        esc.detected = True
-                        esc.detect_distance = np.linalg.norm(esc.pos - np.array([self.map_w/2.0, self.map_h/2.0]))
+                
+                # Calculate Boids vectors
+                com = sum(n.pos for n in neighbors) / len(neighbors)
+                avg_vel = sum(n.velocity for n in neighbors) / len(neighbors)
+                sep_vec = sum((v.pos - n.pos) for n in neighbors if np.linalg.norm(n.pos - v.pos) < NEIGHBOR_RADIUS / 2)
+
+                # Combine vectors using evolved weights
+                final_vec = ((com - v.pos) * v.coh_weight + 
+                             sep_vec * v.sep_weight + 
+                             avg_vel * v.ali_weight)
+                
+                if np.linalg.norm(final_vec) < 1e-6:
+                    new_angles[v.id] = v.angle
+                else:
+                    new_angles[v.id] = math.atan2(final_vec[1], final_vec[0])
+
+            # Apply movement simultaneously
+            for v in self.drones:
+                turn_diff = (new_angles[v.id] - v.angle + math.pi) % (2 * math.pi) - math.pi
+                v.step_move(np.clip(turn_diff, -MAX_TURN, MAX_TURN))
+                v.pos = clamp_pos(v.pos, 0, self.map_w, 0, self.map_h)
+            # --- End Boids Logic ---
+
+            for p in self.prey:
+                if p.detected: continue
+                for v in self.drones:
+                    if v.can_detect(p.pos):
+                        p.detected = True
                         break
-
+            
             if record_trajectories:
-                for v in self.vehicles:
-                    traj['pred'][v.id].append(v.pos.copy())
-                for e in self.escapers:
-                    traj['esc'][e.id].append(e.pos.copy())
+                for v in self.drones: traj['drone'][v.id].append(v.pos.copy())
+                for p in self.prey: traj['prey'][p.id].append(p.pos.copy())
+            
+            if all(np.linalg.norm(p.pos - p.target_base) < 5.0 for p in self.prey): break
 
-        # compute fitness: F = average detection distance of detected escapers + omega * #missing
-        detected = [e for e in self.escapers if e.detected]
-        undetected = [e for e in self.escapers if not e.detected]
-        if detected:
-            avg_det = sum(e.detect_distance for e in detected) / len(detected)
-        else:
-            avg_det = 0.0
-        # omega = half * sqrt(Dx^2 + Dy^2)
-        omega = 0.5 * math.sqrt(self.map_w**2 + self.map_h**2)
-        F = avg_det + omega * len(undetected)
-        stats = {
-            'F': F,
-            'avg_detection_distance': avg_det,
-            'n_detected': len(detected),
-            'n_undetected': len(undetected),
-            'omega': omega
-        }
+        # --- Fitness Calculation ---
+        REACH_BONUS, total_score, reached = self.map_w * 2, 0.0, 0
+        diag = math.sqrt(self.map_w**2 + self.map_h**2)
+        for p in self.prey:
+            score = 0
+            final_dist = np.linalg.norm(p.pos - p.target_base)
+            if final_dist < 5.0:
+                reached += 1
+                score += REACH_BONUS
+            else:
+                score += (diag - final_dist)
+            if p.detected:
+                score *= 0.5
+            total_score += score
+        
+        F = total_score / len(self.prey) if self.prey else 0.0
+        stats = {'F': F, 'n_prey_reached': reached, 'n_detected': sum(1 for p in self.prey if p.detected)}
         return stats, traj
 
-# ---------- Example configuration (you can adjust to paper settings) ----------
 def example_config():
-    predators = []
-    # 4 swarms of 4 UAVs (high speed, medium detection, zenithal camera => 360 in this sim)
-    for _ in range(4):
-        predators.append({'type':'UAV', 'count':2, 'speed':2.0, 'prox_r':20.0, 'detection_range':80.0, 'fov_deg':360})
-    # 1 swarm of 2 UGVs
-    predators.append({'type':'UGV', 'count':2, 'speed':1.0, 'prox_r':10.0, 'detection_range':40.0, 'fov_deg':90})
+    """Default configuration for a single test run."""
+    drones = [{'type':'UAV', 'count':10, 'speed':1.5, 'detection_range':75.0, 'fov_deg':360}]
+    prey = [{'speed':3.0, 'escape_time':0.0, 'avoidance':1.0}] * 4
+    return {'drones':drones, 'prey':prey, 'map_w':400, 'map_h':400, 'sim_time':600}
 
-    # escapers (example 4 escapers): border, coordinate along border, speed, escape_time, avoidance
-    escapers = [
-        {'border':'N', 'coord':200.0, 'speed':3.0, 'escape_time':0.0, 'avoidance':1.0},
-        {'border':'E', 'coord':150.0, 'speed':3.5, 'escape_time':0.0, 'avoidance':0.5},
-        {'border':'S', 'coord':300.0, 'speed':2.5, 'escape_time':0.0, 'avoidance':1.2},
-        {'border':'W', 'coord':100.0, 'speed':4.0, 'escape_time':0.0, 'avoidance':0.8},
-    ]
-    return {'predators':predators, 'escapers':escapers, 'map_w':400, 'map_h':400, 'sim_time':100}  # Reduced sim_time to 100
-
-# ---------- run example ----------
 if __name__ == '__main__':
+    """This block is for simple, standalone testing of the simulator."""
+    print("--- Running a simple standalone test of hunted_sim.py ---")
     cfg = example_config()
     sim = HuntedSim(cfg, seed=42)
-    stats, traj = sim.run(record_trajectories=True)
-    print("Stats:", stats)
-
-
-    plt.figure(figsize=(8, 8))
-
-    # --- Plot Predators (all red) ---
-    pred_label_set = False
-    for pid, tlist in traj['pred'].items():
-        arr = np.array(tlist)
-        if arr.shape[0] > 0:
-            label = 'Predator' if not pred_label_set else '_nolegend_'
-            plt.plot(arr[:,0], arr[:,1], color='red', linewidth=0.7, alpha=0.8, label=label)
-            pred_label_set = True
-
-    # --- Plot Escapers (all blue) ---
-    esc_label_set = False
-    for eid, tlist in traj['esc'].items():
-        arr = np.array(tlist)
-        if arr.shape[0] > 0:
-            label = 'Escaper' if not esc_label_set else '_nolegend_'
-            # Path
-            plt.plot(arr[:,0], arr[:,1], '--', color='blue', linewidth=1.5, label=label)
-            # Start point
-            plt.scatter(arr[0,0], arr[0,1], color='blue', marker='x', s=100, label='_nolegend_')
-            # End point
-            plt.scatter(arr[-1,0], arr[-1,1], color='blue', marker='o', s=80, facecolors='none', edgecolors='blue', label='_nolegend_')
-            esc_label_set = True
-
-    plt.xlim(0, cfg['map_w'])
-    plt.ylim(0, cfg['map_h'])
-    plt.title('Agent Trajectories')
-    plt.xlabel('X Coordinate')
-    plt.ylabel('Y Coordinate')
-    plt.grid(True, linestyle=':', alpha=0.6)
-    plt.legend(loc='best')
-    plt.gca().set_aspect('equal', adjustable='box')
-    plt.savefig('simulation_plot.png')
-    plt.show(block=True)
+    stats, traj = sim.run(record_trajectories=False)
+    print("Simple Test Run Stats:", stats)
+    print("\nNOTE: To run the evolution and see the final plot, run ga_coevolution.py")
