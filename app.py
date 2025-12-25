@@ -50,12 +50,16 @@ def step():
     
     prey_data = []
     for p in current_sim.prey:
+        # Determine status flags for the UI
         prey_data.append({
-            "id": p.id, 
-            "x": p.pos[0], 
-            "y": p.pos[1], 
-            "alive": not p.detected,
+            "id": p.id,
+            "x": p.pos[0],
+            "y": p.pos[1],
             "running": p.running,
+            "detected": getattr(p, 'detected', False),
+            "caught": getattr(p, 'caught', False),
+            "reached": getattr(p, 'reached', False),
+            "on_map": not (getattr(p, 'caught', False) or getattr(p, 'reached', False)),
             "target": p.target_base.tolist()
         })
 

@@ -3,6 +3,12 @@ import numpy as np
 import math
 from collections import defaultdict
 
+# Simulation constants
+REACH_RADIUS = 5.0
+CAPTURE_RADIUS = 5.0
+REPULSION_RADIUS = 75.0  # how far prey sense and try to avoid drones
+REPULSION_STRENGTH = 50.0  # scale for prey repulsion force (higher -> stronger evasion)
+
 # --- Helper Functions Moved Here for Access by App ---
 def apply_drone_genome(sim, drone_genome):
     if drone_genome is None: return
@@ -31,9 +37,9 @@ def decode_prey(prey_genome):
     return prey_list
 
 def example_config():
-    drones = [{'type':'UAV', 'count':6, 'speed':5, 'detection_range':75.0, 'fov_deg':360}]
+    drones = [{'type':'UAV', 'count':8, 'speed':5, 'detection_range':25.0, 'fov_deg':360}]
     prey = [{'speed':3.0, 'escape_time':0.0, 'avoidance':1.0}] * 4
-    return {'drones':drones, 'prey':prey, 'map_w':800, 'map_h':800, 'sim_time':1200}
+    return {'drones':drones, 'prey':prey, 'map_w':400, 'map_h':400, 'sim_time':1200}
 # -----------------------------------------------------
 
 class ChaoticRho:
@@ -89,22 +95,44 @@ class Prey:
         self.avoidance = avoidance
         self.running = False
         self.detected = False
+        self.caught = False
+        self.reached = False
 
     def step_move(self, drones_positions, dt=1.0):
-        if not self.running: return
+        # Do nothing if not active or already removed from the map
+        if not self.running or self.caught or self.reached:
+            return
+
         dir_vec = self.target_base - self.pos
         dist_to_target = np.linalg.norm(dir_vec)
-        if dist_to_target < 1e-6: return
+        # If already very near, mark as reached and stop
+        if dist_to_target <= REACH_RADIUS:
+            self.pos = self.target_base.copy()
+            self.running = False
+            self.reached = True
+            return
+
         attraction_vec = dir_vec / dist_to_target
         repulsion_vec = np.zeros(2)
+        eps = 1e-6
         for dpos in drones_positions:
             dvec = self.pos - dpos
             d = np.linalg.norm(dvec)
-            if 0 < d < 50.0:
-                repulsion_vec += (dvec / d**2)
+            # React to drones within REPULSION_RADIUS; scale so prey actively
+            # evade earlier and more strongly. Use a strength factor so the
+            # repulsion can be comparable to the unit attraction vector.
+            if 0 < d < REPULSION_RADIUS:
+                # unit away vector times (REPULSION_STRENGTH / distance)
+                repulsion_vec += (dvec / (d + eps)) * (REPULSION_STRENGTH / (d + eps))
         move_dir = attraction_vec + self.avoidance * repulsion_vec
         if np.linalg.norm(move_dir) == 0: return
         self.pos += (move_dir / np.linalg.norm(move_dir)) * self.speed * dt
+
+        # After moving, check if prey has reached the base
+        if np.linalg.norm(self.pos - self.target_base) <= REACH_RADIUS:
+            self.pos = self.target_base.copy()
+            self.running = False
+            self.reached = True
 
 class HuntedSim:
     def __init__(self, config, seed=0):
@@ -118,25 +146,18 @@ class HuntedSim:
         self.prey = []
         self.chaos = ChaoticRho(seed=self.rng.randint(1, int(1e9)))
         center_x, center_y = self.map_w / 2, self.map_h / 2
-        base_side = 300.0
-        half_base = base_side / 2
-        self.bases = [
-            np.array([center_x - half_base, center_y - half_base]),
-            np.array([center_x + half_base, center_y - half_base]),
-            np.array([center_x - half_base, center_y + half_base]),
-            np.array([center_x + half_base, center_y + half_base])
-        ]
+        # Single base located at the center of the map
+        self.bases = [np.array([center_x, center_y])]
         self.init_drones(config['drones'])
         self.init_prey(config['prey'])
 
     def init_drones(self, drones_cfg):
         did = 0
+        # Drones start at the exact center of the map
         center = np.array([self.map_w / 2.0, self.map_h / 2.0])
         for group_cfg in drones_cfg:
             for _ in range(group_cfg['count']):
-                r = self.rng.uniform(0, 10)
-                theta = self.rng.uniform(0, 2 * math.pi)
-                pos = center + np.array([math.cos(theta) * r, math.sin(theta) * r])
+                pos = center.copy()
                 angle = self.rng.uniform(-math.pi, math.pi)
                 drone = Drone(did, group_cfg['type'], pos, angle, group_cfg['speed'],
                               group_cfg['detection_range'], group_cfg['fov_deg'])
@@ -176,7 +197,8 @@ class HuntedSim:
         # 2. Move Prey
         drone_pos = [v.pos.copy() for v in self.drones]
         for p in self.prey:
-            if not p.detected:
+            # Only move prey that are active and haven't been removed (caught/reached)
+            if p.running and not p.caught and not p.reached:
                 p.step_move(drone_pos, dt=self.dt)
                 p.pos = clamp_pos(p.pos, 0, self.map_w, 0, self.map_h)
 
@@ -219,11 +241,24 @@ class HuntedSim:
             v.step_move(np.clip(turn_diff, -MAX_TURN, MAX_TURN))
             v.pos = clamp_pos(v.pos, 0, self.map_w, 0, self.map_h)
 
-        # 4. Detection Logic
+        # 4. Detection Logic (skip prey that have reached or been caught)
         for p in self.prey:
-            if p.detected: continue
+            if p.detected or p.caught or p.reached: continue
             for v in self.drones:
                 if v.can_detect(p.pos):
+                    p.detected = True
+                    break
+
+        # 5. Capture Logic: mark prey as caught when a drone comes within its
+        # detection range. This allows a drone to 'catch' a prey without
+        # needing to physically overlap it; being within the drone's
+        # `detection_range` is sufficient.
+        for p in self.prey:
+            if p.caught or p.reached: continue
+            for v in self.drones:
+                if np.linalg.norm(p.pos - v.pos) <= v.detection_range:
+                    p.caught = True
+                    p.running = False
                     p.detected = True
                     break
         
@@ -235,29 +270,42 @@ class HuntedSim:
         
         for t in range(self.max_ticks):
             self.update() # Use the new update method
-            
+
             if record_trajectories:
                 for v in self.drones: traj['drone'][v.id].append(v.pos.copy())
                 for p in self.prey: traj['prey'][p.id].append(p.pos.copy())
-                
-            if all(np.linalg.norm(p.pos - p.target_base) < 5.0 for p in self.prey): break
+
+            # Stop early if there are no more prey on the map (all reached or caught)
+            if all((p.reached or p.caught) for p in self.prey):
+                break
 
         # Calculate Score
         REACH_BONUS = self.map_w * 2
-        total_score, reached = 0.0, 0
+        total_score, reached, caught = 0.0, 0, 0
         diag = math.sqrt(self.map_w**2 + self.map_h**2)
         for p in self.prey:
             score = 0
-            final_dist = np.linalg.norm(p.pos - p.target_base)
-            if final_dist < 5.0:
-                reached += 1
-                score += REACH_BONUS
+            if p.caught:
+                # Caught prey give zero score (predator gets credit elsewhere)
+                score = 0
+                caught += 1
             else:
-                score += (diag - final_dist)
-            if p.detected:
-                score *= 0.5
+                final_dist = np.linalg.norm(p.pos - p.target_base)
+                if p.reached:
+                    reached += 1
+                    score += REACH_BONUS
+                else:
+                    score += (diag - final_dist)
+                # Detection penalizes prey that were detected but not caught/reached
+                if p.detected and not p.reached:
+                    score *= 0.5
             total_score += score
             
         F = total_score / len(self.prey) if self.prey else 0.0
-        stats = {'F': F, 'n_prey_reached': reached, 'n_detected': sum(1 for p in self.prey if p.detected)}
+        stats = {
+            'F': F,
+            'n_prey_reached': reached,
+            'n_prey_caught': caught,
+            'n_detected': sum(1 for p in self.prey if p.detected)
+        }
         return stats, traj

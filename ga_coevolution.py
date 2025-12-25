@@ -7,9 +7,9 @@ from deap import base, creator, tools, algorithms
 # Import helper functions from your updated hunted_sim
 from hunted_sim import HuntedSim, example_config, apply_drone_genome, decode_prey
 
-POP_SIZE = 100
-NGEN = 50    
-CXPB, MUTPB, HOF_SIZE = 0.9, 0.2, 5
+POP_SIZE = 50
+NGEN = 25
+CXPB, MUTPB, HOF_SIZE = 0.6, 0.2, 5
 
 cfg = example_config()
 DRONE_COUNT = sum([p['count'] for p in cfg['drones']])
