@@ -22,8 +22,11 @@ COH_MIN, COH_MAX = 0.0, 3.0
 SEARCH_MIN, SEARCH_MAX = -1.0, 1.0
 
 # Setup DEAP
+# Drone minimizes Fitness (Wants low score = fast catches)
 if "FitnessMin" not in creator.__dict__: creator.create("FitnessMin", base.Fitness, weights=(-1.0,))
 if "Drone" not in creator.__dict__: creator.create("Drone", list, fitness=creator.FitnessMin)
+
+# Prey maximizes Fitness (Wants high score = fast escape or long survival)
 if "FitnessMax" not in creator.__dict__: creator.create("FitnessMax", base.Fitness, weights=(1.0,))
 if "Prey" not in creator.__dict__: creator.create("Prey", list, fitness=creator.FitnessMax)
 
@@ -36,7 +39,6 @@ def drone_init():
 
 def prey_init():
     genome = []
-    # Simplified bounds for initialization
     for _ in range(PREY_COUNT):
         genome.extend([random.uniform(1, 5), random.uniform(5, 600), random.uniform(0, 4)])
     return genome

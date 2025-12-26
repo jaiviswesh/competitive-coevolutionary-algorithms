@@ -1,147 +1,867 @@
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
-    <title>HUNTED Simulation</title>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>HUNTED - Drone Surveillance Coevolution Simulator</title>
     <style>
-        body { font-family: 'Segoe UI', sans-serif; background: #222; color: #eee; text-align: center; }
-        #canvas-container { margin: 20px auto; display: inline-block; border: 4px solid #444; }
-        canvas { background: #1a1a1a; display: block; }
-        button { padding: 10px 20px; font-size: 16px; cursor: pointer; background: #007bff; color: white; border: none; border-radius: 4px; }
-        button:hover { background: #0056b3; }
-        .legend { margin-top: 10px; font-size: 14px; color: #aaa; }
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #1a1a2e 0%, #16213e 50%, #0f3460 100%);
+            min-height: 100vh;
+            padding: 20px;
+            color: #eee;
+        }
+
+        .container {
+            max-width: 1600px;
+            margin: 0 auto;
+        }
+
+        header {
+            text-align: center;
+            margin-bottom: 30px;
+        }
+
+        h1 {
+            font-size: 3em;
+            margin-bottom: 10px;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+            letter-spacing: 2px;
+        }
+
+        .subtitle {
+            font-size: 1.2em;
+            color: #aaa;
+            font-weight: 300;
+        }
+
+        .main-grid {
+            display: grid;
+            grid-template-columns: 380px 1fr;
+            gap: 25px;
+            margin-bottom: 20px;
+        }
+
+        .panel {
+            background: rgba(255, 255, 255, 0.05);
+            backdrop-filter: blur(10px);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            border-radius: 16px;
+            padding: 30px;
+            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.3);
+        }
+
+        .control-panel h2 {
+            color: #667eea;
+            margin-bottom: 25px;
+            font-size: 1.6em;
+            border-bottom: 2px solid rgba(102, 126, 234, 0.3);
+            padding-bottom: 12px;
+        }
+
+        .section-title {
+            color: #888;
+            font-size: 0.9em;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            margin-top: 20px;
+            margin-bottom: 12px;
+            font-weight: 600;
+        }
+
+        .info-box {
+            background: rgba(102, 126, 234, 0.1);
+            border-left: 3px solid #667eea;
+            padding: 12px;
+            margin-bottom: 20px;
+            border-radius: 4px;
+            font-size: 0.9em;
+            color: #aaa;
+        }
+
+        .control-group {
+            margin-bottom: 18px;
+        }
+
+        .control-group label {
+            display: block;
+            font-weight: 600;
+            margin-bottom: 8px;
+            color: #ccc;
+            font-size: 0.95em;
+        }
+
+        .control-value {
+            display: inline-block;
+            margin-left: 10px;
+            font-weight: bold;
+            color: #667eea;
+            font-size: 1.1em;
+        }
+
+        .slider-container {
+            margin-top: 8px;
+        }
+
+        input[type="range"] {
+            width: 100%;
+            height: 6px;
+            border-radius: 3px;
+            background: rgba(255, 255, 255, 0.1);
+            outline: none;
+            -webkit-appearance: none;
+        }
+
+        input[type="range"]::-webkit-slider-thumb {
+            -webkit-appearance: none;
+            appearance: none;
+            width: 18px;
+            height: 18px;
+            border-radius: 50%;
+            background: #667eea;
+            cursor: pointer;
+            box-shadow: 0 0 10px rgba(102, 126, 234, 0.5);
+        }
+
+        input[type="range"]::-moz-range-thumb {
+            width: 18px;
+            height: 18px;
+            border-radius: 50%;
+            background: #667eea;
+            cursor: pointer;
+            box-shadow: 0 0 10px rgba(102, 126, 234, 0.5);
+            border: none;
+        }
+
+        .button-group {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 12px;
+            margin-top: 30px;
+        }
+
+        button {
+            padding: 14px 24px;
+            border: none;
+            border-radius: 8px;
+            font-size: 16px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.3s;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            position: relative;
+            overflow: hidden;
+        }
+
+        button::before {
+            content: '';
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            width: 0;
+            height: 0;
+            border-radius: 50%;
+            background: rgba(255, 255, 255, 0.3);
+            transform: translate(-50%, -50%);
+            transition: width 0.6s, height 0.6s;
+        }
+
+        button:hover::before {
+            width: 300px;
+            height: 300px;
+        }
+
+        .btn-start {
+            background: linear-gradient(135deg, #00ff88 0%, #00cc66 100%);
+            color: #000;
+            grid-column: span 2;
+        }
+
+        .btn-start:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 6px 20px rgba(0, 255, 136, 0.4);
+        }
+
+        .btn-stop {
+            background: linear-gradient(135deg, #ff4444 0%, #cc0000 100%);
+            color: white;
+        }
+
+        .btn-stop:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 6px 20px rgba(255, 68, 68, 0.4);
+        }
+
+        .btn-pause {
+            background: linear-gradient(135deg, #ff9800 0%, #e68900 100%);
+            color: white;
+        }
+
+        .btn-pause:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 6px 20px rgba(255, 152, 0, 0.4);
+        }
+
+        button:disabled {
+            opacity: 0.4;
+            cursor: not-allowed;
+            transform: none !important;
+        }
+
+        .simulation-area {
+            display: flex;
+            flex-direction: column;
+            gap: 20px;
+        }
+
+        #canvas-container {
+            position: relative;
+            background: rgba(0, 0, 0, 0.3);
+            border-radius: 12px;
+            overflow: hidden;
+            border: 2px solid rgba(102, 126, 234, 0.3);
+            box-shadow: 0 0 40px rgba(102, 126, 234, 0.2);
+        }
+
+        #simulationCanvas {
+            display: block;
+            width: 100%;
+            height: auto;
+            background: #0a0a1a;
+        }
+
+        .stats-panel {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 15px;
+        }
+
+        .stat-card {
+            background: rgba(255, 255, 255, 0.05);
+            backdrop-filter: blur(10px);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            padding: 20px;
+            border-radius: 12px;
+            text-align: center;
+            transition: transform 0.3s;
+        }
+
+        .stat-card:hover {
+            transform: translateY(-4px);
+            border-color: rgba(102, 126, 234, 0.5);
+        }
+
+        .stat-label {
+            font-size: 0.85em;
+            color: #888;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            margin-bottom: 8px;
+        }
+
+        .stat-value {
+            font-size: 2.2em;
+            font-weight: bold;
+            color: #fff;
+            text-shadow: 0 0 10px rgba(102, 126, 234, 0.5);
+        }
+
+        .legend {
+            display: flex;
+            justify-content: center;
+            gap: 30px;
+            padding: 20px;
+            background: rgba(255, 255, 255, 0.05);
+            backdrop-filter: blur(10px);
+            border-radius: 12px;
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            flex-wrap: wrap;
+        }
+
+        .legend-item {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            font-size: 0.95em;
+        }
+
+        .legend-icon {
+            width: 24px;
+            height: 24px;
+            border-radius: 50%;
+            border: 2px solid rgba(255, 255, 255, 0.3);
+        }
+
+        .icon-drone {
+            background: #00aaff;
+            box-shadow: 0 0 10px #00aaff;
+        }
+
+        .icon-prey-free {
+            background: #ff4444;
+            box-shadow: 0 0 10px #ff4444;
+        }
+
+        .icon-prey-detected {
+            background: #ff9900;
+            box-shadow: 0 0 10px #ff9900;
+        }
+
+        .icon-prey-escaped {
+            background: #00ff00;
+            box-shadow: 0 0 10px #00ff00;
+        }
+
+        .icon-base {
+            background: rgba(0, 255, 0, 0.3);
+            border: 2px solid rgba(0, 255, 0, 0.6);
+        }
+
+        .status-message {
+            text-align: center;
+            padding: 15px;
+            margin-top: 15px;
+            border-radius: 8px;
+            font-weight: 600;
+            display: none;
+            backdrop-filter: blur(10px);
+        }
+
+        .status-message.info {
+            background: rgba(33, 150, 243, 0.2);
+            border: 1px solid rgba(33, 150, 243, 0.5);
+            color: #64b5f6;
+        }
+
+        .status-message.success {
+            background: rgba(76, 175, 80, 0.2);
+            border: 1px solid rgba(76, 175, 80, 0.5);
+            color: #81c784;
+        }
+
+        .status-message.error {
+            background: rgba(244, 67, 54, 0.2);
+            border: 1px solid rgba(244, 67, 54, 0.5);
+            color: #e57373;
+        }
+
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.6; }
+        }
+
+        .running {
+            animation: pulse 2s infinite;
+        }
+
+        .speed-indicator {
+            display: inline-block;
+            padding: 4px 12px;
+            background: rgba(102, 126, 234, 0.2);
+            border-radius: 12px;
+            font-size: 0.85em;
+            margin-left: 10px;
+        }
+
+        @media (max-width: 1200px) {
+            .main-grid {
+                grid-template-columns: 1fr;
+            }
+        }
     </style>
 </head>
 <body>
+    <div class="container">
+        <header>
+            <h1>🛸 HUNTED SIMULATION</h1>
+            <p class="subtitle">Competitive Coevolutionary Drone Surveillance System</p>
+        </header>
 
-    <h1>HUNTED Swarm Prototype</h1>
-    <button onclick="resetGame()">Start / Reset Simulation</button>
-    
-    <div id="canvas-container">
-        <canvas id="simCanvas" width="800" height="800"></canvas>
-    </div>
+        <div class="main-grid">
+            <div class="control-panel panel">
+                <h2>⚙️ Mission Control</h2>
+                
+                <div class="info-box">
+                    <strong>Scenario:</strong> Prey spawn at random border locations and attempt to reach a hidden base. Drones start at map center and must search blindly to intercept intruders before they reach the target.
+                </div>
 
-    <div class="legend">
-        <span style="color:#00aaff">● Drones (start at center)</span> | 
-        <span style="color:#ff4444">● Prey (free)</span> | 
-        <span style="color:#ff9900">● Detected</span> | 
-        <span style="color:#00ff00">■ Reached</span> | 
-        <span style="color:#000000">✖ Caught</span>
+                <div class="section-title">Simulation Parameters</div>
+
+                <div class="control-group">
+                    <label>
+                        Simulation Speed
+                        <span class="speed-indicator" id="speedValue">50ms</span>
+                    </label>
+                    <div class="slider-container">
+                        <input type="range" id="speedSlider" min="10" max="200" value="50" step="10">
+                    </div>
+                </div>
+
+                <div class="section-title">Population Status</div>
+
+                <div class="control-group">
+                    <label>Active Drones: <span class="control-value" id="droneCount">0</span></label>
+                </div>
+
+                <div class="control-group">
+                    <label>Total Prey: <span class="control-value" id="preyCount">0</span></label>
+                </div>
+
+                <div class="control-group">
+                    <label>Model Status: <span class="control-value" id="modelStatus">Not Loaded</span></label>
+                </div>
+
+                <div class="button-group">
+                    <button class="btn-start" id="startBtn" onclick="startSimulation()">
+                        ▶ Start Mission
+                    </button>
+                    <button class="btn-pause" id="pauseBtn" onclick="pauseSimulation()" disabled>
+                        ⏸ Pause
+                    </button>
+                    <button class="btn-stop" id="stopBtn" onclick="stopSimulation()" disabled>
+                        ⏹ Stop & Reset
+                    </button>
+                </div>
+
+                <div id="statusMessage" class="status-message"></div>
+
+                <div class="section-title" style="margin-top: 30px;">Evolved Behaviors</div>
+                <div class="info-box" style="font-size: 0.85em;">
+                    The simulation uses trained GA models from <code>best_model.json</code>:
+                    <ul style="margin-top: 8px; margin-left: 20px;">
+                        <li><strong>Drones:</strong> Separation, alignment, cohesion, search weights</li>
+                        <li><strong>Prey:</strong> Speed, escape timing, avoidance strategies</li>
+                    </ul>
+                </div>
+            </div>
+
+            <div class="simulation-area">
+                <div id="canvas-container">
+                    <canvas id="simulationCanvas" width="1000" height="1000"></canvas>
+                </div>
+
+                <div class="legend">
+                    <div class="legend-item">
+                        <div class="legend-icon icon-drone"></div>
+                        <span>Drones (Searching)</span>
+                    </div>
+                    <div class="legend-item">
+                        <div class="legend-icon icon-prey-free"></div>
+                        <span>Prey (Active)</span>
+                    </div>
+                    <div class="legend-item">
+                        <div class="legend-icon icon-prey-detected"></div>
+                        <span>Prey (Detected)</span>
+                    </div>
+                    <div class="legend-item">
+                        <div class="legend-icon icon-prey-escaped"></div>
+                        <span>Prey (Reached Base)</span>
+                    </div>
+                    <div class="legend-item">
+                        <div class="legend-icon icon-base"></div>
+                        <span>Hidden Base</span>
+                    </div>
+                </div>
+
+                <div class="stats-panel">
+                    <div class="stat-card">
+                        <div class="stat-label">Simulation Ticks</div>
+                        <div class="stat-value" id="tickCount">0</div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-label">Prey Detected</div>
+                        <div class="stat-value" id="detectedCount">0</div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-label">Prey Escaped</div>
+                        <div class="stat-value" id="escapedCount">0</div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-label">Running Prey</div>
+                        <div class="stat-value" id="runningCount">0</div>
+                    </div>
+                </div>
+            </div>
+        </div>
     </div>
 
     <script>
-        const canvas = document.getElementById('simCanvas');
+        const canvas = document.getElementById('simulationCanvas');
         const ctx = canvas.getContext('2d');
+        
+        let isRunning = false;
+        let isPaused = false;
         let gameInterval = null;
+        let tickCount = 0;
+        let detectedCount = 0;
+        let escapedCount = 0;
+        let simulationSpeed = 50;
+        let basePosition = null;
 
-        // Base coordinates (Hardcoded to match sim logic for visualization)
-        const W = 800, H = 800;
-        // Single central base (simulation now uses one base at the center)
-        const bases = [ {x: W/2, y: H/2} ];
+        const MAP_W = 1000;
+        const MAP_H = 1000;
 
-        async function resetGame() {
-            console.log("Resetting...");
-            await fetch('/reset', { method: 'POST' });
+        canvas.width = MAP_W;
+        canvas.height = MAP_H;
+
+        // Speed slider control
+        document.getElementById('speedSlider').addEventListener('input', (e) => {
+            simulationSpeed = parseInt(e.target.value);
+            document.getElementById('speedValue').textContent = simulationSpeed + 'ms';
             
-            if (gameInterval) clearInterval(gameInterval);
-            gameInterval = setInterval(updateFrame, 50); // Updates every 50ms
+            if (isRunning && !isPaused && gameInterval) {
+                clearInterval(gameInterval);
+                gameInterval = setInterval(updateFrame, simulationSpeed);
+            }
+        });
+
+        async function startSimulation() {
+            if (isRunning) {
+                if (isPaused) {
+                    isPaused = false;
+                    document.getElementById('pauseBtn').textContent = '⏸ Pause';
+                    showMessage('Simulation resumed', 'success');
+                }
+                return;
+            }
+
+            showMessage('Initializing simulation...', 'info');
+            
+            try {
+                const response = await fetch('/reset', { method: 'POST' });
+                const data = await response.json();
+                
+                if (data.status === 'Game Reset') {
+                    isRunning = true;
+                    isPaused = false;
+                    tickCount = 0;
+                    detectedCount = 0;
+                    escapedCount = 0;
+                    basePosition = null;
+                    
+                    document.getElementById('startBtn').disabled = true;
+                    document.getElementById('startBtn').classList.add('running');
+                    document.getElementById('pauseBtn').disabled = false;
+                    document.getElementById('stopBtn').disabled = false;
+                    
+                    document.getElementById('modelStatus').textContent = 'Loaded ✓';
+                    document.getElementById('modelStatus').style.color = '#00ff88';
+                    
+                    showMessage('Mission started! Evolved behaviors active.', 'success');
+                    
+                    gameInterval = setInterval(updateFrame, simulationSpeed);
+                } else {
+                    throw new Error('Failed to reset game');
+                }
+            } catch (error) {
+                showMessage('Error starting simulation: ' + error.message, 'error');
+                console.error(error);
+            }
+        }
+
+        function pauseSimulation() {
+            if (!isRunning) return;
+            
+            isPaused = !isPaused;
+            
+            if (isPaused) {
+                document.getElementById('pauseBtn').textContent = '▶ Resume';
+                showMessage('Simulation paused', 'info');
+            } else {
+                document.getElementById('pauseBtn').textContent = '⏸ Pause';
+                showMessage('Simulation resumed', 'success');
+            }
+        }
+
+        function stopSimulation() {
+            if (!isRunning) return;
+            
+            isRunning = false;
+            isPaused = false;
+            
+            if (gameInterval) {
+                clearInterval(gameInterval);
+                gameInterval = null;
+            }
+            
+            document.getElementById('startBtn').disabled = false;
+            document.getElementById('startBtn').classList.remove('running');
+            document.getElementById('pauseBtn').disabled = true;
+            document.getElementById('pauseBtn').textContent = '⏸ Pause';
+            document.getElementById('stopBtn').disabled = true;
+            
+            document.getElementById('modelStatus').textContent = 'Not Loaded';
+            document.getElementById('modelStatus').style.color = '#667eea';
+            
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            drawBackground();
+            
+            showMessage('Simulation stopped', 'info');
+        }
+
+        function drawBackground() {
+            // Grid
+            ctx.strokeStyle = 'rgba(102, 126, 234, 0.08)';
+            ctx.lineWidth = 1;
+            for (let i = 0; i <= MAP_W; i += 100) {
+                ctx.beginPath();
+                ctx.moveTo(i, 0);
+                ctx.lineTo(i, MAP_H);
+                ctx.stroke();
+                ctx.beginPath();
+                ctx.moveTo(0, i);
+                ctx.lineTo(MAP_W, i);
+                ctx.stroke();
+            }
+
+            // Border (Prey spawn zone)
+            ctx.strokeStyle = 'rgba(255, 68, 68, 0.3)';
+            ctx.lineWidth = 3;
+            ctx.strokeRect(2, 2, MAP_W - 4, MAP_H - 4);
+
+            // Center marker (Drone start position)
+            ctx.fillStyle = 'rgba(0, 170, 255, 0.15)';
+            ctx.strokeStyle = 'rgba(0, 170, 255, 0.4)';
+            ctx.lineWidth = 2;
+            ctx.beginPath();
+            ctx.arc(MAP_W / 2, MAP_H / 2, 50, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.stroke();
+
+            ctx.fillStyle = 'rgba(0, 170, 255, 0.8)';
+            ctx.beginPath();
+            ctx.arc(MAP_W / 2, MAP_H / 2, 6, 0, Math.PI * 2);
+            ctx.fill();
+
+            // Draw hidden base if known
+            if (basePosition) {
+                ctx.fillStyle = 'rgba(0, 255, 0, 0.1)';
+                ctx.strokeStyle = 'rgba(0, 255, 0, 0.5)';
+                ctx.lineWidth = 3;
+                ctx.setLineDash([10, 5]);
+                ctx.beginPath();
+                ctx.arc(basePosition[0], basePosition[1], 40, 0, Math.PI * 2);
+                ctx.fill();
+                ctx.stroke();
+                ctx.setLineDash([]);
+
+                ctx.fillStyle = 'rgba(0, 255, 0, 0.7)';
+                ctx.beginPath();
+                ctx.arc(basePosition[0], basePosition[1], 8, 0, Math.PI * 2);
+                ctx.fill();
+
+                // Base label
+                ctx.fillStyle = 'rgba(0, 255, 0, 0.7)';
+                ctx.font = 'bold 14px Segoe UI';
+                ctx.textAlign = 'center';
+                ctx.fillText('HIDDEN BASE', basePosition[0], basePosition[1] - 50);
+            }
+
+            // Labels
+            ctx.fillStyle = 'rgba(255, 68, 68, 0.6)';
+            ctx.font = '13px Segoe UI';
+            ctx.textAlign = 'left';
+            ctx.fillText('PREY SPAWN PERIMETER', 15, 25);
+            
+            ctx.fillStyle = 'rgba(0, 170, 255, 0.6)';
+            ctx.textAlign = 'center';
+            ctx.fillText('DRONE START', MAP_W / 2, MAP_H / 2 + 70);
         }
 
         async function updateFrame() {
+            if (isPaused) return;
+
             try {
                 const response = await fetch('/step');
                 const data = await response.json();
                 
-                if(data.error) return;
+                if (data.error) {
+                    showMessage('Error: ' + data.error, 'error');
+                    stopSimulation();
+                    return;
+                }
 
-                // 1. Clear Screen
+                // Store base position
+                if (data.base && !basePosition) {
+                    basePosition = data.base;
+                }
+
+                // Clear and redraw
                 ctx.clearRect(0, 0, canvas.width, canvas.height);
+                drawBackground();
 
-                // 2. Draw Perimeter (where prey spawn)
-                ctx.strokeStyle = "rgba(255,255,255,0.06)";
-                ctx.lineWidth = 1;
-                ctx.strokeRect(0.5, 0.5, W-1, H-1);
-
-                // 3. Draw Base (Green at center)
-                ctx.fillStyle = "rgba(0, 255, 0, 0.2)";
-                ctx.strokeStyle = "rgba(0, 255, 0, 0.6)";
-                bases.forEach(b => {
-                    ctx.beginPath();
-                    ctx.arc(b.x, b.y, 6, 0, Math.PI*2);
-                    ctx.fill();
-                    ctx.strokeRect(b.x - 12, b.y - 12, 24, 24);
-                });
-
-                // 4. Draw Prey (states: free, detected, reached, caught)
+                // Draw prey trails and target lines
                 data.prey.forEach(p => {
-                    if (p.caught) {
-                        // Caught prey: dark X
-                        ctx.strokeStyle = "#000000";
-                        ctx.lineWidth = 2;
-                        ctx.beginPath();
-                        ctx.moveTo(p.x-6, p.y-6); ctx.lineTo(p.x+6, p.y+6);
-                        ctx.moveTo(p.x+6, p.y-6); ctx.lineTo(p.x-6, p.y+6);
-                        ctx.stroke();
+                    if (p.alive && p.running && basePosition) {
+                        // Faint line to base
+                        ctx.strokeStyle = 'rgba(255, 68, 68, 0.1)';
                         ctx.lineWidth = 1;
-                        return;
-                    }
-
-                    if (p.reached) {
-                        // Reached base: green square
-                        ctx.fillStyle = "#00ff00";
-                        ctx.fillRect(p.x - 5, p.y - 5, 10, 10);
-                        return;
-                    }
-
-                    if (p.detected) {
-                        // Detected but not yet caught/reached: orange circle
-                        ctx.fillStyle = "#ff9900";
-                        ctx.beginPath();
-                        ctx.arc(p.x, p.y, 6, 0, 2 * Math.PI);
-                        ctx.fill();
-                    } else {
-                        // Free prey: red
-                        ctx.fillStyle = "#ff4444";
-                        ctx.beginPath();
-                        ctx.arc(p.x, p.y, 6, 0, 2 * Math.PI);
-                        ctx.fill();
-                    }
-
-                    // Draw line to target base if running
-                    if(p.running) {
-                        ctx.strokeStyle = "rgba(255, 68, 68, 0.25)";
+                        ctx.setLineDash([3, 3]);
                         ctx.beginPath();
                         ctx.moveTo(p.x, p.y);
-                        ctx.lineTo(p.target[0], p.target[1]);
+                        ctx.lineTo(basePosition[0], basePosition[1]);
                         ctx.stroke();
+                        ctx.setLineDash([]);
                     }
                 });
 
-                // 4. Draw Drones (Blue with direction indicator)
-                ctx.fillStyle = "#00aaff";
-                ctx.strokeStyle = "#00aaff";
+                // Draw drones
+                let activeDrones = 0;
                 data.drones.forEach(d => {
+                    activeDrones++;
+
+                    // Detection radius
+                    ctx.strokeStyle = 'rgba(0, 170, 255, 0.06)';
+                    ctx.lineWidth = 1;
                     ctx.beginPath();
-                    ctx.arc(d.x, d.y, 5, 0, 2 * Math.PI);
+                    ctx.arc(d.x, d.y, 60, 0, Math.PI * 2);
+                    ctx.stroke();
+
+                    // Drone body
+                    ctx.fillStyle = '#00aaff';
+                    ctx.shadowColor = '#00aaff';
+                    ctx.shadowBlur = 15;
+                    ctx.beginPath();
+                    ctx.arc(d.x, d.y, 8, 0, Math.PI * 2);
                     ctx.fill();
-                    
-                    // Direction line
+                    ctx.shadowBlur = 0;
+
+                    // Direction indicator
+                    ctx.strokeStyle = '#00aaff';
+                    ctx.lineWidth = 3;
                     ctx.beginPath();
                     ctx.moveTo(d.x, d.y);
-                    ctx.lineTo(d.x + Math.cos(d.angle)*15, d.y + Math.sin(d.angle)*15);
-                    ctx.stroke();
-                    
-                    // Optional: FOV arc (faint)
-                    ctx.strokeStyle = "rgba(0, 170, 255, 0.1)";
-                    ctx.beginPath();
-                    ctx.arc(d.x, d.y, 20, d.angle - 0.5, d.angle + 0.5);
+                    ctx.lineTo(d.x + Math.cos(d.angle) * 20, d.y + Math.sin(d.angle) * 20);
                     ctx.stroke();
                 });
 
-            } catch (e) {
-                console.error("Error fetching step:", e);
-                clearInterval(gameInterval);
+                // Draw prey
+                let activePrey = 0;
+                let running = 0;
+                let detected = 0;
+                let escaped = 0;
+
+                data.prey.forEach(p => {
+                    activePrey++;
+
+                    if (p.escaped) {
+                        // Escaped (reached base)
+                        ctx.fillStyle = '#00ff00';
+                        ctx.shadowColor = '#00ff00';
+                        ctx.shadowBlur = 20;
+                        ctx.fillRect(p.x - 7, p.y - 7, 14, 14);
+                        ctx.shadowBlur = 0;
+                        
+                        // Success mark
+                        ctx.strokeStyle = '#003300';
+                        ctx.lineWidth = 2;
+                        ctx.beginPath();
+                        ctx.moveTo(p.x - 4, p.y);
+                        ctx.lineTo(p.x - 1, p.y + 4);
+                        ctx.lineTo(p.x + 5, p.y - 4);
+                        ctx.stroke();
+                        
+                        escaped++;
+                    } else if (!p.alive) {
+                        // Detected
+                        ctx.fillStyle = '#ff9900';
+                        ctx.shadowColor = '#ff9900';
+                        ctx.shadowBlur = 15;
+                        ctx.beginPath();
+                        ctx.arc(p.x, p.y, 7, 0, Math.PI * 2);
+                        ctx.fill();
+                        ctx.shadowBlur = 0;
+                        
+                        // X mark
+                        ctx.strokeStyle = '#000';
+                        ctx.lineWidth = 3;
+                        ctx.beginPath();
+                        ctx.moveTo(p.x - 5, p.y - 5);
+                        ctx.lineTo(p.x + 5, p.y + 5);
+                        ctx.moveTo(p.x + 5, p.y - 5);
+                        ctx.lineTo(p.x - 5, p.y + 5);
+                        ctx.stroke();
+                        
+                        detected++;
+                    } else {
+                        // Active prey
+                        if (p.running) running++;
+
+                        ctx.fillStyle = p.running ? '#ff4444' : '#888888';
+                        ctx.shadowColor = p.running ? '#ff4444' : '#888888';
+                        ctx.shadowBlur = p.running ? 15 : 8;
+                        ctx.beginPath();
+                        ctx.arc(p.x, p.y, 6, 0, Math.PI * 2);
+                        ctx.fill();
+                        ctx.shadowBlur = 0;
+
+                        // Outer ring for running prey
+                        if (p.running) {
+                            ctx.strokeStyle = 'rgba(255, 68, 68, 0.6)';
+                            ctx.lineWidth = 2;
+                            ctx.beginPath();
+                            ctx.arc(p.x, p.y, 11, 0, Math.PI * 2);
+                            ctx.stroke();
+                        }
+                    }
+                });
+
+                // Update stats
+                tickCount++;
+                detectedCount = detected;
+                escapedCount = escaped;
+
+                document.getElementById('tickCount').textContent = tickCount;
+                document.getElementById('droneCount').textContent = activeDrones;
+                document.getElementById('preyCount').textContent = data.prey.length;
+                document.getElementById('detectedCount').textContent = detectedCount;
+                document.getElementById('escapedCount').textContent = escapedCount;
+                document.getElementById('runningCount').textContent = running;
+
+                // Check end condition
+                if ((detected + escaped) >= data.prey.length) {
+                    stopSimulation();
+                    
+                    const successRate = (detected / data.prey.length * 100).toFixed(1);
+                    const escapeRate = (escaped / data.prey.length * 100).toFixed(1);
+                    
+                    showMessage(
+                        `Mission Complete! Detected: ${detected} (${successRate}%) | Escaped: ${escaped} (${escapeRate}%)`, 
+                        escaped > detected ? 'error' : 'success'
+                    );
+                }
+
+            } catch (error) {
+                console.error('Error fetching step:', error);
+                showMessage('Connection error: ' + error.message, 'error');
+                stopSimulation();
             }
         }
+
+        function showMessage(message, type) {
+            const msgEl = document.getElementById('statusMessage');
+            msgEl.textContent = message;
+            msgEl.className = `status-message ${type}`;
+            msgEl.style.display = 'block';
+            
+            setTimeout(() => {
+                msgEl.style.display = 'none';
+            }, 5000);
+        }
+
+        // Initialize
+        drawBackground();
     </script>
 </body>
 </html>

@@ -1,11 +1,10 @@
-from flask import Flask, jsonify, render_template
+from flask import Flask, jsonify, render_template, request
 import json
 import numpy as np
 from hunted_sim import HuntedSim, example_config, apply_drone_genome, decode_prey
 
 app = Flask(__name__)
 
-# Holds the active simulation instance
 current_sim = None
 
 def load_best_model():
@@ -27,9 +26,7 @@ def reset_game():
     cfg = example_config()
     current_sim = HuntedSim(cfg)
     
-    # Load parameters from the trained JSON file
     drone_genome, prey_genome = load_best_model()
-    
     if drone_genome:
         apply_drone_genome(current_sim, drone_genome)
         current_sim.update_prey_list(decode_prey(prey_genome))
@@ -45,27 +42,27 @@ def step():
 
     current_sim.update()
 
-
     drones_data = [{"id": d.id, "x": d.pos[0], "y": d.pos[1], "angle": d.angle} for d in current_sim.drones]
     
     prey_data = []
     for p in current_sim.prey:
-        # Determine status flags for the UI
         prey_data.append({
-            "id": p.id,
-            "x": p.pos[0],
-            "y": p.pos[1],
+            "id": p.id, 
+            "x": p.pos[0], 
+            "y": p.pos[1], 
+            "alive": not p.detected and not p.escaped,
             "running": p.running,
-            "detected": getattr(p, 'detected', False),
-            "caught": getattr(p, 'caught', False),
-            "reached": getattr(p, 'reached', False),
-            "on_map": not (getattr(p, 'caught', False) or getattr(p, 'reached', False)),
-            "target": p.target_base.tolist()
+            "escaped": p.escaped,
+            "target": p.target_pos.tolist() 
         })
+
+    # INCLUDE BASE POSITION
+    base_data = current_sim.base_pos.tolist()
 
     return jsonify({
         "drones": drones_data,
-        "prey": prey_data
+        "prey": prey_data,
+        "base": base_data # Send base coords
     })
 
 if __name__ == '__main__':
