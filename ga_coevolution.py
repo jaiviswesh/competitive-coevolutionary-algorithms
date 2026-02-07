@@ -7,8 +7,8 @@ from deap import base, creator, tools, algorithms
 # Import helper functions from your updated hunted_sim
 from hunted_sim import HuntedSim, example_config, apply_drone_genome, decode_prey
 
-POP_SIZE = 50
-NGEN = 25
+POP_SIZE = 70
+NGEN = 75
 CXPB, MUTPB, HOF_SIZE = 0.6, 0.2, 5
 
 cfg = example_config()
@@ -16,9 +16,9 @@ DRONE_COUNT = sum([p['count'] for p in cfg['drones']])
 PREY_COUNT = len(cfg['prey'])
 
 # Bounds
-SEP_MIN, SEP_MAX = 0.0, 5.0
+SEP_MIN, SEP_MAX = 0.0, 7.0
 ALI_MIN, ALI_MAX = 0.0, 3.0
-COH_MIN, COH_MAX = 0.0, 3.0
+COH_MIN, COH_MAX = 0.0, 1.0
 SEARCH_MIN, SEARCH_MAX = -1.0, 1.0
 
 # Setup DEAP
@@ -72,6 +72,11 @@ def main():
     toolbox_prey.register("mutate", tools.mutGaussian, mu=0, sigma=0.5, indpb=0.1)
     toolbox_prey.register("select", tools.selTournament, tournsize=3)
     
+    # Enable parallel evaluation
+    pool = multiprocessing.Pool()
+    toolbox_drone.register("map", pool.map)
+    toolbox_prey.register("map", pool.map)
+    
     # Run simple evolution
     pop_drone = toolbox_drone.population(n=POP_SIZE)
     pop_prey = toolbox_prey.population(n=POP_SIZE)
@@ -83,14 +88,14 @@ def main():
         # Assess Drones
         best_prey = list(hof_prey)[0] if len(hof_prey) > 0 else None
         eval_drone = partial(evaluate, opponent_genome=best_prey, individual_type='drone')
-        fits_d = map(eval_drone, pop_drone)
+        fits_d = toolbox_drone.map(eval_drone, pop_drone)
         for ind, fit in zip(pop_drone, fits_d): ind.fitness.values = fit
         hof_drone.update(pop_drone)
         
         # Assess Prey
         best_drone = list(hof_drone)[0] if len(hof_drone) > 0 else None
         eval_prey = partial(evaluate, opponent_genome=best_drone, individual_type='prey')
-        fits_p = map(eval_prey, pop_prey)
+        fits_p = toolbox_prey.map(eval_prey, pop_prey)
         for ind, fit in zip(pop_prey, fits_p): ind.fitness.values = fit
         hof_prey.update(pop_prey)
 
@@ -114,6 +119,9 @@ def main():
     with open("best_model.json", "w") as f:
         json.dump(data, f)
     print("Done.")
+    
+    pool.close()
+    pool.join()
 
 if __name__ == "__main__":
     main()

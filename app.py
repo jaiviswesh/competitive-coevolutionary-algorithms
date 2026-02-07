@@ -53,7 +53,8 @@ def step():
             "alive": not p.detected and not p.escaped,
             "running": p.running,
             "escaped": p.escaped,
-            "target": p.target_pos.tolist() 
+            "target": p.target_pos.tolist(),
+            "is_player": p.is_player,  # <--- Send this to frontend
         })
 
     # INCLUDE BASE POSITION
@@ -64,6 +65,23 @@ def step():
         "prey": prey_data,
         "base": base_data # Send base coords
     })
+
+@app.route('/player_input', methods=['POST'])
+def player_input():
+    global current_sim
+    if not current_sim: return jsonify({"error": "No game"})
+    
+    data = request.json
+    target_x = data.get('target_x')
+    target_y = data.get('target_y')
+    
+    if target_x is None or target_y is None:
+        return jsonify({"error": "Missing target coordinates"})
+    
+    # Pass target position to the simulation
+    current_sim.set_player_target(target_x, target_y)
+    
+    return jsonify({"status": "ok"})
 
 if __name__ == '__main__':
     app.run(debug=True, port=5000)

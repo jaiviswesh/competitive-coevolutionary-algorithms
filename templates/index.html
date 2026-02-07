@@ -313,6 +313,11 @@
             box-shadow: 0 0 10px #ff4444;
         }
 
+        .icon-player {
+            background: #00ffff;
+            box-shadow: 0 0 10px #00ffff;
+        }
+
         .icon-prey-detected {
             background: #ff9900;
             box-shadow: 0 0 10px #ff9900;
@@ -394,6 +399,8 @@
                 
                 <div class="info-box">
                     <strong>Scenario:</strong> Prey spawn at random border locations and attempt to reach a hidden base. Drones start at map center and must search blindly to intercept intruders before they reach the target.
+                    <br><br>
+                    <strong>Player Control:</strong> Click on the canvas to direct the cyan prey to that location. It will move at its constant speed towards the clicked point.
                 </div>
 
                 <div class="section-title">Simulation Parameters</div>
@@ -461,6 +468,10 @@
                         <span>Prey (Active)</span>
                     </div>
                     <div class="legend-item">
+                        <div class="legend-icon icon-player"></div>
+                        <span>Player (Controlled)</span>
+                    </div>
+                    <div class="legend-item">
                         <div class="legend-icon icon-prey-detected"></div>
                         <span>Prey (Detected)</span>
                     </div>
@@ -508,6 +519,30 @@
         let escapedCount = 0;
         let simulationSpeed = 50;
         let basePosition = null;
+        let playerPos = null; // Track player position for mouse control
+
+        // MOUSE INPUT HANDLING
+        canvas.addEventListener('click', (e) => {
+            if (!isRunning || !playerPos) return;
+            
+            const rect = canvas.getBoundingClientRect();
+            const scaleX = canvas.width / rect.width;
+            const scaleY = canvas.height / rect.height;
+            const clickX = (e.clientX - rect.left) * scaleX;
+            const clickY = (e.clientY - rect.top) * scaleY;
+            
+            // Send target position directly
+            sendInput(clickX, clickY);
+        });
+
+        async function sendInput(targetX, targetY) {
+            // Send target position to server
+            await fetch('/player_input', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ target_x: targetX, target_y: targetY })
+            });
+        }
 
         const MAP_W = 1000;
         const MAP_H = 1000;
@@ -798,13 +833,36 @@
                         // Active prey
                         if (p.running) running++;
 
-                        ctx.fillStyle = p.running ? '#ff4444' : '#888888';
-                        ctx.shadowColor = p.running ? '#ff4444' : '#888888';
-                        ctx.shadowBlur = p.running ? 15 : 8;
+                        // Set colors based on player status
+                        let fillColor, shadowColor, shadowBlur;
+                        if (p.is_player) {
+                            fillColor = "#00ffff"; // Cyan for Player
+                            shadowColor = "#00ffff";
+                            shadowBlur = 20;
+                            // Store player position for mouse control
+                            playerPos = [p.x, p.y];
+                        } else {
+                            fillColor = p.running ? '#ff4444' : '#888888';
+                            shadowColor = p.running ? '#ff4444' : '#888888';
+                            shadowBlur = p.running ? 15 : 8;
+                        }
+
+                        ctx.fillStyle = fillColor;
+                        ctx.shadowColor = shadowColor;
+                        ctx.shadowBlur = shadowBlur;
                         ctx.beginPath();
                         ctx.arc(p.x, p.y, 6, 0, Math.PI * 2);
                         ctx.fill();
                         ctx.shadowBlur = 0;
+
+                        // Special indicator for player
+                        if (p.is_player) {
+                            ctx.strokeStyle = "#fff";
+                            ctx.lineWidth = 3;
+                            ctx.beginPath();
+                            ctx.arc(p.x, p.y, 11, 0, Math.PI * 2);
+                            ctx.stroke();
+                        }
 
                         // Outer ring for running prey
                         if (p.running) {

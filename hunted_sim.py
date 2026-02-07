@@ -32,9 +32,9 @@ def decode_prey(prey_genome):
 def example_config():
     # INTRUDER SEARCH SCENARIO
     # Drones need high speed to intercept since they don't know the destination
-    drones = [{'type':'UAV', 'count':8, 'speed':6.0, 'detection_range':60.0, 'fov_deg':360}]
+    drones = [{'type':'UAV', 'count':8, 'speed':6.0, 'detection_range':90.0, 'fov_deg':360}]
     prey = [{'speed':3.5, 'escape_time':0.0, 'avoidance':3.0}] * 6
-    return {'drones':drones, 'prey':prey, 'map_w':1000, 'map_h':1000, 'sim_time':1500}
+    return {'drones':drones, 'prey':prey, 'map_w':1000, 'map_h':1000, 'sim_time':1000}
 
 # -----------------------------------------------------
 
@@ -84,7 +84,7 @@ class Drone:
         return abs(diff) <= self.fov / 2
 
 class Prey:
-    def __init__(self, id, start_pos, target_pos, speed, start_time, avoidance):
+    def __init__(self, id, start_pos, target_pos, speed, start_time, avoidance, is_player=False):
         self.id = id
         self.pos = np.array(start_pos, dtype=float)
         self.target_pos = np.array(target_pos, dtype=float)
@@ -92,6 +92,10 @@ class Prey:
         self.start_time = start_time
         self.avoidance = avoidance
         self.running = False
+        
+        self.is_player = is_player          # <--- NEW FLAG
+        self.player_vel = np.array([0, 0])  # <--- NEW: Store player input velocity
+        self.player_target = None           # <--- NEW: Target position for player movement
         
         # Status
         self.detected = False
@@ -106,6 +110,25 @@ class Prey:
     def step_move(self, drones_positions, dt=1.0):
         if not self.running: return
         
+        # --- NEW: PLAYER LOGIC ---
+        if self.is_player:
+            # If player has a target, check if reached
+            if self.player_target is not None:
+                dist_to_target = np.linalg.norm(self.player_target - self.pos)
+                if dist_to_target < 10.0:  # Close enough to target (10 units)
+                    self.running = False
+                    self.player_target = None
+                    self.player_vel = np.array([0, 0])
+                    return
+            
+            # If player, move based on manual input only
+            norm = np.linalg.norm(self.player_vel)
+            if norm > 0:
+                # Normalize to max speed if necessary, or just use input direction
+                self.pos += (self.player_vel / norm) * self.speed * dt
+            return 
+        # -------------------------
+        
         # 1. Attraction to Hidden Base
         dir_vec = self.target_pos - self.pos
         dist_to_target = np.linalg.norm(dir_vec)
@@ -114,7 +137,7 @@ class Prey:
 
         # 2. Repulsion from Drones
         repulsion_vec = np.zeros(2)
-        AVOID_RANGE = 150.0 
+        AVOID_RANGE = 120.0 
         SCALING_FACTOR = 5000.0 
 
         for dpos in drones_positions:
@@ -175,7 +198,7 @@ class HuntedSim:
 
     def init_prey(self, prey_cfg):
         pid = 0
-        for e_cfg in prey_cfg:
+        for i, e_cfg in enumerate(prey_cfg): # Use enumerate to find index
             # SPAWN: Random Border Point
             edge = self.rng.choice(['N', 'S', 'E', 'W'])
             if edge == 'N':   start_pos = [self.rng.uniform(0, self.map_w), self.map_h]
@@ -183,15 +206,32 @@ class HuntedSim:
             elif edge == 'E': start_pos = [self.map_w, self.rng.uniform(0, self.map_h)]
             else:             start_pos = [0, self.rng.uniform(0, self.map_h)]
 
-            # TARGET: The Random Base
+            # Make the FIRST prey (pid=0) the Player
+            is_player = (pid == 0) 
+            
             prey = Prey(pid, start_pos, self.base_pos, e_cfg['speed'],
-                        e_cfg['escape_time'], e_cfg['avoidance'])
+                        e_cfg['escape_time'], e_cfg['avoidance'], is_player=is_player)
             self.prey.append(prey)
             pid += 1
 
     def update_prey_list(self, prey_list):
         self.prey = []
         self.init_prey(prey_list)
+
+    # Add this helper function to HuntedSim to receive input
+    def set_player_target(self, target_x, target_y):
+        # Find the player prey (id 0)
+        for p in self.prey:
+            if p.is_player and not p.detected and not p.escaped:
+                p.player_target = np.array([target_x, target_y])
+                # Calculate direction to target
+                direction = p.player_target - p.pos
+                norm = np.linalg.norm(direction)
+                if norm > 0:
+                    p.player_vel = direction / norm  # Unit vector towards target
+                    # Ensure player starts running immediately on input
+                    if not p.running: p.running = True 
+                break
 
     def update(self):
         time_s = self.current_tick * self.dt
